@@ -221,6 +221,44 @@ describe('applyQueryAwareBoosts', () => {
     const boosted = applyQueryAwareBoosts([article, agent], 'Hermes Agent');
     expect(boosted[0].slug).toBe('knowledge/agents/hermes');
   });
+
+  test('prefers canonical company summaries when the query adds a brand-style ai suffix', () => {
+    const noisy = makeResult({
+      slug: 'claude-memory/feedback_obsidian_vaults',
+      title: 'Feedback Obsidian Vaults',
+      type: 'feedback',
+      chunk_text: 'Winston and Rodaco have separate Obsidian vaults. Two AI agents with different identities.',
+      score: 1.0,
+    });
+    const company = makeResult({
+      slug: 'knowledge/companies/rodaco/summary',
+      title: 'Summary',
+      type: 'company-summary' as any,
+      chunk_text: '# Rodaco',
+      score: 0.7,
+    });
+    const boosted = applyQueryAwareBoosts([noisy, company], 'Rodaco AI');
+    expect(boosted[0].slug).toBe('knowledge/companies/rodaco/summary');
+  });
+
+  test('does not treat unspaced prefixes as ai suffix aliases', () => {
+    const noisy = makeResult({
+      slug: 'knowledge/companies/openai/summary',
+      title: 'Summary',
+      type: 'company-summary' as any,
+      chunk_text: '# OpenAI',
+      score: 1.0,
+    });
+    const wrongPrefix = makeResult({
+      slug: 'knowledge/companies/open/summary',
+      title: 'Summary',
+      type: 'company-summary' as any,
+      chunk_text: '# Open',
+      score: 0.7,
+    });
+    const boosted = applyQueryAwareBoosts([noisy, wrongPrefix], 'OpenAI');
+    expect(boosted[0].slug).toBe('knowledge/companies/openai/summary');
+  });
 });
 
 describe('hybridSearch exact-query candidate rescue', () => {

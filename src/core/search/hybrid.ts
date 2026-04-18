@@ -42,6 +42,7 @@ const TYPE_HINTS_BY_TYPE: Record<string, string[]> = {
   'infrastructure-summary': ['infrastructure', 'machine', 'server', 'host'],
   'infra-status': ['infrastructure', 'machine', 'server', 'host', 'status'],
 };
+const BRAND_ALIAS_SUFFIXES = new Set(['ai']);
 const CANONICAL_PAGE_SUFFIXES = new Set(['summary', 'status', 'readme', 'index']);
 const EXACT_CANONICAL_PATH_BOOST = 8.0;
 const DEBUG = process.env.GBRAIN_SEARCH_DEBUG === '1';
@@ -235,6 +236,28 @@ function matchesQueryTypeHint(result: SearchResult, normalizedQuery: string): bo
   return tokens.length > 0 && tokens.every(token => hints.includes(token));
 }
 
+function primaryEntityKey(result: SearchResult): string {
+  const slugParts = (result.slug || '').split('/').filter(Boolean);
+  if (slugParts.length === 0) return '';
+  const lastPart = slugParts[slugParts.length - 1] || '';
+  const parentPart = slugParts[slugParts.length - 2] || '';
+  if (CANONICAL_PAGE_SUFFIXES.has(lastPart) && parentPart) {
+    return normalizeMatchText(parentPart);
+  }
+  return normalizeMatchText(lastPart);
+}
+
+function matchesBrandAliasSuffix(result: SearchResult, normalizedQuery: string): boolean {
+  const type = String(result.type || '');
+  if (type !== 'company' && type !== 'company-summary') return false;
+  const entityKey = primaryEntityKey(result);
+  if (!entityKey || !normalizedQuery.startsWith(`${entityKey} `)) return false;
+  const remainder = normalizedQuery.slice(entityKey.length).trim();
+  if (!remainder) return false;
+  const tokens = remainder.split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every(token => BRAND_ALIAS_SUFFIXES.has(token));
+}
+
 function queryAwareBoost(result: SearchResult, normalizedQuery: string): number {
   if (!normalizedQuery) return 1;
 
@@ -246,6 +269,7 @@ function queryAwareBoost(result: SearchResult, normalizedQuery: string): number 
   const exactSlug = slugKeys.includes(normalizedQuery);
   const structured = STRUCTURED_ENTITY_TYPES.has(type);
   const queryTypeHint = matchesQueryTypeHint(result, normalizedQuery);
+  const brandAliasSuffix = matchesBrandAliasSuffix(result, normalizedQuery);
   const lastPart = slugParts[slugParts.length - 1] || '';
   const parentPart = slugParts[slugParts.length - 2] || '';
   const canonicalPathMatch = CANONICAL_PAGE_SUFFIXES.has(lastPart)
@@ -257,6 +281,7 @@ function queryAwareBoost(result: SearchResult, normalizedQuery: string): number 
   if ((exactTitle || exactSlug) && structured) boost *= 1.5;
   if (queryTypeHint) boost *= 3.5;
   if (queryTypeHint && structured) boost *= 1.5;
+  if (brandAliasSuffix && structured) boost *= 2.5;
   if (canonicalPathMatch && structured) boost *= EXACT_CANONICAL_PATH_BOOST;
   return boost;
 }
