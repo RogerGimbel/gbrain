@@ -259,6 +259,63 @@ describe('applyQueryAwareBoosts', () => {
     const boosted = applyQueryAwareBoosts([noisy, wrongPrefix], 'OpenAI');
     expect(boosted[0].slug).toBe('knowledge/companies/openai/summary');
   });
+
+  test('prefers the explicit company canonical page for ambiguous company disambiguators', () => {
+    const agent = makeResult({
+      slug: 'knowledge/agents/rodaco',
+      title: 'Rodaco',
+      type: 'agent-profile' as any,
+      chunk_text: '# Rodaco',
+      score: 1.0,
+    });
+    const company = makeResult({
+      slug: 'knowledge/companies/rodaco/summary',
+      title: 'Summary',
+      type: 'company-summary' as any,
+      chunk_text: '# Rodaco',
+      score: 0.2,
+    });
+    const boosted = applyQueryAwareBoosts([agent, company], 'Rodaco Company');
+    expect(boosted[0].slug).toBe('knowledge/companies/rodaco/summary');
+  });
+
+  test('prefers the explicit agent canonical page for ambiguous agent disambiguators', () => {
+    const company = makeResult({
+      slug: 'knowledge/companies/rodaco/summary',
+      title: 'Summary',
+      type: 'company-summary' as any,
+      chunk_text: '# Rodaco',
+      score: 1.0,
+    });
+    const agent = makeResult({
+      slug: 'knowledge/agents/rodaco',
+      title: 'Rodaco',
+      type: 'agent-profile' as any,
+      chunk_text: '# Rodaco',
+      score: 0.15,
+    });
+    const boosted = applyQueryAwareBoosts([company, agent], 'Rodaco Agent');
+    expect(boosted[0].slug).toBe('knowledge/agents/rodaco');
+  });
+
+  test('prefers the explicit Hermes agent canonical page for assistant-style aliases', () => {
+    const installNote = makeResult({
+      slug: 'claude-memory/project_hermes_m5',
+      title: 'Project Hermes M5',
+      type: 'project',
+      chunk_text: 'Hermes Agent on the M5 Mac.',
+      score: 1.0,
+    });
+    const agent = makeResult({
+      slug: 'knowledge/agents/hermes',
+      title: 'Hermes',
+      type: 'agent-profile' as any,
+      chunk_text: '# Hermes',
+      score: 0.15,
+    });
+    const boosted = applyQueryAwareBoosts([installNote, agent], 'Hermes Assistant');
+    expect(boosted[0].slug).toBe('knowledge/agents/hermes');
+  });
 });
 
 describe('hybridSearch exact-query candidate rescue', () => {

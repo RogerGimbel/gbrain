@@ -45,6 +45,40 @@ const TYPE_HINTS_BY_TYPE: Record<string, string[]> = {
 const BRAND_ALIAS_SUFFIXES = new Set(['ai']);
 const CANONICAL_PAGE_SUFFIXES = new Set(['summary', 'status', 'readme', 'index']);
 const EXACT_CANONICAL_PATH_BOOST = 8.0;
+const EXPLICIT_QUERY_PREFERENCE_BOOST = 12.0;
+const EXPLICIT_QUERY_PREFERENCES: Array<{ preferredSlug: string; aliases: string[] }> = [
+  {
+    preferredSlug: 'knowledge/companies/rodaco/summary',
+    aliases: ['rodaco', 'rodaco ai', 'rodaco company'],
+  },
+  {
+    preferredSlug: 'knowledge/agents/rodaco',
+    aliases: ['rodaco agent', 'rodaco bot', 'rodaco assistant'],
+  },
+  {
+    preferredSlug: 'knowledge/agents/hermes',
+    aliases: ['hermes', 'hermes agent', 'hermes bot', 'hermes assistant'],
+  },
+  {
+    preferredSlug: 'knowledge/agents/atlas',
+    aliases: ['atlas', 'atlas agent', 'atlas bot', 'atlas assistant'],
+  },
+  {
+    preferredSlug: 'knowledge/agents/winston',
+    aliases: ['winston', 'winston agent', 'winston bot', 'winston assistant'],
+  },
+  {
+    preferredSlug: 'knowledge/agents/jeeves',
+    aliases: ['jeeves', 'jeeves agent', 'jeeves bot', 'jeeves assistant'],
+  },
+  {
+    preferredSlug: 'knowledge/agents/gbrain',
+    aliases: ['gbrain', 'gbrain service', 'gbrain system', 'gbrain tool'],
+  },
+];
+const EXPLICIT_QUERY_PREFERENCE_MAP = new Map(
+  EXPLICIT_QUERY_PREFERENCES.flatMap(({ preferredSlug, aliases }) => aliases.map(alias => [alias, preferredSlug] as const)),
+);
 const DEBUG = process.env.GBRAIN_SEARCH_DEBUG === '1';
 
 export interface HybridSearchOpts extends SearchOpts {
@@ -258,6 +292,12 @@ function matchesBrandAliasSuffix(result: SearchResult, normalizedQuery: string):
   return tokens.length > 0 && tokens.every(token => BRAND_ALIAS_SUFFIXES.has(token));
 }
 
+function matchesExplicitQueryPreference(result: SearchResult, normalizedQuery: string): boolean {
+  const preferredSlug = EXPLICIT_QUERY_PREFERENCE_MAP.get(normalizedQuery);
+  if (!preferredSlug) return false;
+  return result.slug === preferredSlug;
+}
+
 function queryAwareBoost(result: SearchResult, normalizedQuery: string): number {
   if (!normalizedQuery) return 1;
 
@@ -270,6 +310,7 @@ function queryAwareBoost(result: SearchResult, normalizedQuery: string): number 
   const structured = STRUCTURED_ENTITY_TYPES.has(type);
   const queryTypeHint = matchesQueryTypeHint(result, normalizedQuery);
   const brandAliasSuffix = matchesBrandAliasSuffix(result, normalizedQuery);
+  const explicitQueryPreference = matchesExplicitQueryPreference(result, normalizedQuery);
   const lastPart = slugParts[slugParts.length - 1] || '';
   const parentPart = slugParts[slugParts.length - 2] || '';
   const canonicalPathMatch = CANONICAL_PAGE_SUFFIXES.has(lastPart)
@@ -282,6 +323,7 @@ function queryAwareBoost(result: SearchResult, normalizedQuery: string): number 
   if (queryTypeHint) boost *= 3.5;
   if (queryTypeHint && structured) boost *= 1.5;
   if (brandAliasSuffix && structured) boost *= 2.5;
+  if (explicitQueryPreference) boost *= EXPLICIT_QUERY_PREFERENCE_BOOST;
   if (canonicalPathMatch && structured) boost *= EXACT_CANONICAL_PATH_BOOST;
   return boost;
 }
