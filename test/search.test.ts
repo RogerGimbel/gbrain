@@ -203,6 +203,24 @@ describe('applyQueryAwareBoosts', () => {
     const boosted = applyQueryAwareBoosts([rawImport, status], 'SelfGrowth');
     expect(boosted[0].slug).toBe('projects/control/project-status/selfgrowth');
   });
+
+  test('prefers canonical agent pages when the query adds an explicit type hint', () => {
+    const article = makeResult({
+      slug: 'clippings/how-to-build-smart-stress-tested-openclaw-hermes-agents-for-under-30',
+      title: 'How to Build Smart, Stress-Tested OpenClaw + Hermes Agents for Under $30',
+      type: 'concept',
+      score: 1.0,
+    });
+    const agent = makeResult({
+      slug: 'knowledge/agents/hermes',
+      title: 'Hermes',
+      type: 'agent-profile' as any,
+      chunk_text: '# Hermes',
+      score: 0.75,
+    });
+    const boosted = applyQueryAwareBoosts([article, agent], 'Hermes Agent');
+    expect(boosted[0].slug).toBe('knowledge/agents/hermes');
+  });
 });
 
 describe('hybridSearch exact-query candidate rescue', () => {

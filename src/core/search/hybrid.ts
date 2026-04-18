@@ -30,6 +30,18 @@ const STRUCTURED_ENTITY_TYPES = new Set([
   'infrastructure-summary',
   'infra-status',
 ]);
+const TYPE_HINTS_BY_TYPE: Record<string, string[]> = {
+  'agent-profile': ['agent', 'bot'],
+  'service-profile': ['service', 'tool', 'system'],
+  'company': ['company', 'business'],
+  'company-summary': ['company', 'business'],
+  'person': ['person', 'profile'],
+  'people-profile': ['person', 'profile'],
+  'project-status': ['project', 'status'],
+  'project-summary': ['project', 'summary'],
+  'infrastructure-summary': ['infrastructure', 'machine', 'server', 'host'],
+  'infra-status': ['infrastructure', 'machine', 'server', 'host', 'status'],
+};
 const CANONICAL_PAGE_SUFFIXES = new Set(['summary', 'status', 'readme', 'index']);
 const EXACT_CANONICAL_PATH_BOOST = 8.0;
 const DEBUG = process.env.GBRAIN_SEARCH_DEBUG === '1';
@@ -212,6 +224,17 @@ function computeCandidateLimit(query: string, limit: number): number {
   return clampSearchLimit(Math.max(base, 100));
 }
 
+function matchesQueryTypeHint(result: SearchResult, normalizedQuery: string): boolean {
+  const title = normalizeMatchText(result.title || '');
+  if (!title || !normalizedQuery.startsWith(title)) return false;
+  const remainder = normalizedQuery.slice(title.length).trim();
+  if (!remainder) return false;
+  const hints = TYPE_HINTS_BY_TYPE[String(result.type || '')] || [];
+  if (hints.length === 0) return false;
+  const tokens = remainder.split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every(token => hints.includes(token));
+}
+
 function queryAwareBoost(result: SearchResult, normalizedQuery: string): number {
   if (!normalizedQuery) return 1;
 
@@ -222,6 +245,7 @@ function queryAwareBoost(result: SearchResult, normalizedQuery: string): number 
   const exactTitle = title === normalizedQuery;
   const exactSlug = slugKeys.includes(normalizedQuery);
   const structured = STRUCTURED_ENTITY_TYPES.has(type);
+  const queryTypeHint = matchesQueryTypeHint(result, normalizedQuery);
   const lastPart = slugParts[slugParts.length - 1] || '';
   const parentPart = slugParts[slugParts.length - 2] || '';
   const canonicalPathMatch = CANONICAL_PAGE_SUFFIXES.has(lastPart)
@@ -231,6 +255,8 @@ function queryAwareBoost(result: SearchResult, normalizedQuery: string): number 
   if (exactTitle) boost *= 2.5;
   if (exactSlug) boost *= 3.0;
   if ((exactTitle || exactSlug) && structured) boost *= 1.5;
+  if (queryTypeHint) boost *= 3.5;
+  if (queryTypeHint && structured) boost *= 1.5;
   if (canonicalPathMatch && structured) boost *= EXACT_CANONICAL_PATH_BOOST;
   return boost;
 }
