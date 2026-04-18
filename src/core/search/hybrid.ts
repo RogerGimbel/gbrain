@@ -54,7 +54,7 @@ export async function hybridSearch(
 ): Promise<SearchResult[]> {
   const limit = opts?.limit || 20;
   const offset = opts?.offset || 0;
-  const innerLimit = Math.min(limit * 2, MAX_SEARCH_LIMIT);
+  const innerLimit = computeCandidateLimit(query, limit);
 
   // Auto-detect detail level from query intent when caller doesn't specify
   const detail = opts?.detail ?? autoDetectDetail(query);
@@ -194,6 +194,22 @@ function deriveSlugKeys(slug: string): string[] {
   }
   keys.add(normalizeMatchText(slug));
   return Array.from(keys).filter(Boolean);
+}
+
+function isExactEntityLikeQuery(query: string): boolean {
+  const normalized = normalizeMatchText(query);
+  if (!normalized) return false;
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 4) return false;
+  if (normalized.length < 2 || normalized.length > 80) return false;
+  if (/[?*]/.test(query)) return false;
+  return true;
+}
+
+function computeCandidateLimit(query: string, limit: number): number {
+  const base = Math.min(limit * 2, MAX_SEARCH_LIMIT);
+  if (!isExactEntityLikeQuery(query)) return base;
+  return clampSearchLimit(Math.max(base, 100));
 }
 
 function queryAwareBoost(result: SearchResult, normalizedQuery: string): number {

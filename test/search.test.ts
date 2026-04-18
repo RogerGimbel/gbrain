@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { rrfFusion, cosineSimilarity, applyQueryAwareBoosts } from '../src/core/search/hybrid.ts';
+import { rrfFusion, cosineSimilarity, applyQueryAwareBoosts, hybridSearch } from '../src/core/search/hybrid.ts';
 import type { SearchResult } from '../src/core/types.ts';
 
 function makeResult(overrides: Partial<SearchResult> = {}): SearchResult {
@@ -202,6 +202,58 @@ describe('applyQueryAwareBoosts', () => {
     });
     const boosted = applyQueryAwareBoosts([rawImport, status], 'SelfGrowth');
     expect(boosted[0].slug).toBe('projects/control/project-status/selfgrowth');
+  });
+});
+
+describe('hybridSearch exact-query candidate rescue', () => {
+  test('widens the keyword candidate pool so exact canonical company pages are not missed behind noisy lexical matches', async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const dataset: SearchResult[] = [
+        makeResult({
+          slug: 'knowledge/agents/rodaco',
+          title: 'Rodaco',
+          type: 'agent-profile' as any,
+          chunk_text: 'Backup agent on Intel Mac.',
+          chunk_source: 'compiled_truth',
+          chunk_id: 1,
+          score: 0.710937,
+        }),
+      ];
+
+      for (let i = 0; i < 56; i++) {
+        dataset.push(makeResult({
+          slug: `noise/page-${i}`,
+          title: `Noise ${i}`,
+          type: 'project',
+          chunk_text: `Rodaco mention ${i}`,
+          chunk_source: 'compiled_truth',
+          chunk_id: i + 2,
+          score: 0.35 - i * 0.001,
+        }));
+      }
+
+      dataset.push(makeResult({
+        slug: 'knowledge/companies/rodaco/summary',
+        title: 'Summary',
+        type: 'company-summary' as any,
+        chunk_text: '# Rodaco',
+        chunk_source: 'compiled_truth',
+        chunk_id: 1000,
+        score: 0.33098254,
+      }));
+
+      const engine = {
+        searchKeyword: async (_query: string, opts?: { limit?: number }) => dataset.slice(0, opts?.limit ?? dataset.length),
+      } as any;
+
+      const results = await hybridSearch(engine, 'Rodaco', { limit: 10, expansion: false, detail: 'medium' });
+      expect(results[0].slug).toBe('knowledge/companies/rodaco/summary');
+    } finally {
+      if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalKey;
+    }
   });
 });
 
