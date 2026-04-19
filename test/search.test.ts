@@ -316,6 +316,44 @@ describe('applyQueryAwareBoosts', () => {
     const boosted = applyQueryAwareBoosts([installNote, agent], 'Hermes Assistant');
     expect(boosted[0].slug).toBe('knowledge/agents/hermes');
   });
+
+  test('prefers the OpenClaw project status page for bare OpenClaw queries', () => {
+    const infrastructure = makeResult({
+      slug: 'projects/control/infrastructure-status/openclaw',
+      title: 'Openclaw',
+      type: 'infra-status' as any,
+      chunk_text: '# OpenClaw Infrastructure Status',
+      score: 1.0,
+    });
+    const project = makeResult({
+      slug: 'projects/control/project-status/openclaw',
+      title: 'Openclaw',
+      type: 'project-status' as any,
+      chunk_text: '# OpenClaw Project Status',
+      score: 0.2,
+    });
+    const boosted = applyQueryAwareBoosts([infrastructure, project], 'OpenClaw');
+    expect(boosted[0].slug).toBe('projects/control/project-status/openclaw');
+  });
+
+  test('prefers the OpenClaw infrastructure status page for explicit infrastructure disambiguators', () => {
+    const project = makeResult({
+      slug: 'projects/control/project-status/openclaw',
+      title: 'Openclaw',
+      type: 'project-status' as any,
+      chunk_text: '# OpenClaw Project Status',
+      score: 1.0,
+    });
+    const infrastructure = makeResult({
+      slug: 'projects/control/infrastructure-status/openclaw',
+      title: 'Openclaw',
+      type: 'infra-status' as any,
+      chunk_text: '# OpenClaw Infrastructure Status',
+      score: 0.2,
+    });
+    const boosted = applyQueryAwareBoosts([project, infrastructure], 'OpenClaw Infrastructure Status');
+    expect(boosted[0].slug).toBe('projects/control/infrastructure-status/openclaw');
+  });
 });
 
 describe('hybridSearch exact-query candidate rescue', () => {

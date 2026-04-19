@@ -75,6 +75,14 @@ const EXPLICIT_QUERY_PREFERENCES: Array<{ preferredSlug: string; aliases: string
     preferredSlug: 'knowledge/agents/gbrain',
     aliases: ['gbrain', 'gbrain service', 'gbrain system', 'gbrain tool'],
   },
+  {
+    preferredSlug: 'projects/control/project-status/openclaw',
+    aliases: ['openclaw', 'openclaw project', 'openclaw project status'],
+  },
+  {
+    preferredSlug: 'projects/control/infrastructure-status/openclaw',
+    aliases: ['openclaw infrastructure', 'openclaw infrastructure status'],
+  },
 ];
 const EXPLICIT_QUERY_PREFERENCE_MAP = new Map(
   EXPLICIT_QUERY_PREFERENCES.flatMap(({ preferredSlug, aliases }) => aliases.map(alias => [alias, preferredSlug] as const)),
