@@ -83,6 +83,14 @@ const EXPLICIT_QUERY_PREFERENCES: Array<{ preferredSlug: string; aliases: string
     preferredSlug: 'projects/control/infrastructure-status/openclaw',
     aliases: ['openclaw infrastructure', 'openclaw infrastructure status'],
   },
+  {
+    preferredSlug: 'projects/control/project-status/selfgrowth',
+    aliases: ['selfgrowth', 'selfgrowth status'],
+  },
+  {
+    preferredSlug: 'knowledge/projects/selfgrowth-knowledge-pilot/wiki/selfgrowth-current-state',
+    aliases: ['selfgrowth current state'],
+  },
 ];
 const EXPLICIT_QUERY_PREFERENCE_MAP = new Map(
   EXPLICIT_QUERY_PREFERENCES.flatMap(({ preferredSlug, aliases }) => aliases.map(alias => [alias, preferredSlug] as const)),

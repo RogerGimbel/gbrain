@@ -354,6 +354,44 @@ describe('applyQueryAwareBoosts', () => {
     const boosted = applyQueryAwareBoosts([project, infrastructure], 'OpenClaw Infrastructure Status');
     expect(boosted[0].slug).toBe('projects/control/infrastructure-status/openclaw');
   });
+
+  test('prefers the SelfGrowth project status page for bare SelfGrowth queries', () => {
+    const imported = makeResult({
+      slug: 'knowledge/projects/selfgrowth-knowledge-pilot/raw/imported-selfgrowth',
+      title: 'selfgrowth',
+      type: 'project',
+      chunk_text: '# SelfGrowth',
+      score: 1.0,
+    });
+    const status = makeResult({
+      slug: 'projects/control/project-status/selfgrowth',
+      title: 'Selfgrowth',
+      type: 'project-status' as any,
+      chunk_text: '# SelfGrowth Status',
+      score: 0.2,
+    });
+    const boosted = applyQueryAwareBoosts([imported, status], 'SelfGrowth');
+    expect(boosted[0].slug).toBe('projects/control/project-status/selfgrowth');
+  });
+
+  test('prefers the SelfGrowth Current State canonical page over source notes', () => {
+    const source = makeResult({
+      slug: 'knowledge/projects/selfgrowth-knowledge-pilot/wiki/sources/source-imported-selfgrowth',
+      title: 'Source — selfgrowth',
+      type: 'project',
+      chunk_text: '# Source — selfgrowth',
+      score: 1.0,
+    });
+    const currentState = makeResult({
+      slug: 'knowledge/projects/selfgrowth-knowledge-pilot/wiki/selfgrowth-current-state',
+      title: 'SelfGrowth Current State',
+      type: 'project',
+      chunk_text: '# SelfGrowth Current State',
+      score: 0.05,
+    });
+    const boosted = applyQueryAwareBoosts([source, currentState], 'SelfGrowth Current State');
+    expect(boosted[0].slug).toBe('knowledge/projects/selfgrowth-knowledge-pilot/wiki/selfgrowth-current-state');
+  });
 });
 
 describe('hybridSearch exact-query candidate rescue', () => {
