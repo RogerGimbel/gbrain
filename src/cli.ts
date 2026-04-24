@@ -18,7 +18,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query']);
+const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack']);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -296,6 +296,26 @@ async function handleCliOnly(command: string, args: string[]) {
     }
     return;
   }
+  if (command === 'check-resolvable') {
+    const { runCheckResolvable } = await import('./commands/check-resolvable.ts');
+    await runCheckResolvable(args);
+    return;
+  }
+  if (command === 'routing-eval') {
+    const { runRoutingEvalCli } = await import('./commands/routing-eval.ts');
+    await runRoutingEvalCli(args);
+    return;
+  }
+  if (command === 'skillify') {
+    const { runSkillify } = await import('./commands/skillify.ts');
+    await runSkillify(args);
+    return;
+  }
+  if (command === 'skillpack') {
+    const { runSkillpack } = await import('./commands/skillpack.ts');
+    await runSkillpack(args);
+    return;
+  }
 
   // All remaining CLI-only commands need a DB connection
   const engine = await connectEngine();
@@ -473,6 +493,10 @@ TIMELINE
 
 TOOLS
   extract <links|timeline|all> [dir] Extract links/timeline from markdown into DB
+  check-resolvable [--strict]        Validate skill resolver tree
+  routing-eval [--skills-dir PATH]   Run structural skill routing eval fixtures
+  skillify <scaffold|check>          Scaffold/check OpenClaw-compatible skills
+  skillpack <list|install|diff>      List/install bundled skills into a workspace
   publish <page.md> [--password]     Shareable HTML (strips private data, optional AES-256)
   check-backlinks <check|fix> [dir]  Find/fix missing back-links across brain
   lint <dir|file> [--fix]            Catch LLM artifacts, placeholder dates, bad frontmatter
