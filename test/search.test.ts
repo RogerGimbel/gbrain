@@ -374,6 +374,32 @@ describe('applyQueryAwareBoosts', () => {
     expect(boosted[0].slug).toBe('projects/control/project-status/selfgrowth');
   });
 
+  test('prefers the SelfGrowth project status page for canonical-summary queries', () => {
+    const upgradePlan = makeResult({
+      slug: 'projects/control/agent-stack-upgrade-plan-2026-04-30',
+      title: 'Agent Stack Upgrade Plan — OpenClaw/Winston, Hermes/Rogue, GBrain',
+      type: 'project-plan' as any,
+      chunk_text: 'SelfGrowth canonical summary ranking remains a known retrieval-quality watch item.',
+      score: 0.997281,
+    });
+    const rawImport = makeResult({
+      slug: 'knowledge/projects/selfgrowth-knowledge-pilot/raw/imported-selfgrowth',
+      title: 'selfgrowth',
+      type: 'project',
+      chunk_text: '# selfgrowth',
+      score: 0.870197,
+    });
+    const status = makeResult({
+      slug: 'projects/control/project-status/selfgrowth',
+      title: 'SelfGrowth Status',
+      type: 'project-status' as any,
+      chunk_text: '# SelfGrowth Status',
+      score: 0.80831,
+    });
+    const boosted = applyQueryAwareBoosts([upgradePlan, rawImport, status], 'SelfGrowth canonical summary');
+    expect(boosted[0].slug).toBe('projects/control/project-status/selfgrowth');
+  });
+
   test('prefers the SelfGrowth Current State canonical page over source notes', () => {
     const source = makeResult({
       slug: 'knowledge/projects/selfgrowth-knowledge-pilot/wiki/sources/source-imported-selfgrowth',

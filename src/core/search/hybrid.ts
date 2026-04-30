@@ -85,7 +85,7 @@ const EXPLICIT_QUERY_PREFERENCES: Array<{ preferredSlug: string; aliases: string
   },
   {
     preferredSlug: 'projects/control/project-status/selfgrowth',
-    aliases: ['selfgrowth', 'selfgrowth status'],
+    aliases: ['selfgrowth', 'selfgrowth status', 'selfgrowth canonical summary'],
   },
   {
     preferredSlug: 'knowledge/projects/selfgrowth-knowledge-pilot/wiki/selfgrowth-current-state',
