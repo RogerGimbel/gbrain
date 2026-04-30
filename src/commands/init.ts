@@ -2,11 +2,9 @@ import { execSync } from 'child_process';
 import { readdirSync, lstatSync, existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { homedir } from 'os';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { saveConfig, type GBrainConfig } from '../core/config.ts';
+import { gbrainPath, saveConfig, type GBrainConfig } from '../core/config.ts';
 import { createEngine } from '../core/engine-factory.ts';
 
 export async function runInit(args: string[]) {
@@ -60,7 +58,7 @@ export async function runInit(args: string[]) {
 }
 
 async function initPGLite(opts: { jsonOutput: boolean; apiKey: string | null; customPath: string | null }) {
-  const dbPath = opts.customPath || join(homedir(), '.gbrain', 'brain.pglite');
+  const dbPath = opts.customPath || gbrainPath('brain.pglite');
   console.log(`Setting up local brain with PGLite (no server needed)...`);
 
   const engine = await createEngine({ engine: 'pglite' });

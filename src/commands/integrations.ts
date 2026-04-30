@@ -24,6 +24,7 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
+import { gbrainPath } from '../core/config.ts';
 
 // --- Types ---
 
@@ -334,7 +335,7 @@ function findRecipe(id: string): ParsedRecipe | null {
 // --- Heartbeat ---
 
 function heartbeatDir(id: string): string {
-  return join(homedir(), '.gbrain', 'integrations', id);
+  return gbrainPath('integrations', id);
 }
 
 function heartbeatPath(id: string): string {

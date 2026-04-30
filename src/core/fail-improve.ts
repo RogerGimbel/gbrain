@@ -12,7 +12,7 @@
 
 import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
-import { homedir } from 'os';
+import { gbrainPath } from './config.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,7 +45,9 @@ export interface TestCase {
   source: 'fail-improve-loop';
 }
 
-const LOG_DIR = join(homedir(), '.gbrain', 'fail-improve');
+function defaultLogDir(): string {
+  return gbrainPath('fail-improve');
+}
 const MAX_ENTRIES = 1000;
 
 // ---------------------------------------------------------------------------
@@ -56,7 +58,7 @@ export class FailImproveLoop {
   private logDir: string;
 
   constructor(logDir?: string) {
-    this.logDir = logDir || LOG_DIR;
+    this.logDir = logDir || defaultLogDir();
   }
 
   /**

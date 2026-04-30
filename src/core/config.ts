@@ -3,9 +3,10 @@ import { join } from 'path';
 import { homedir } from 'os';
 import type { EngineConfig } from './types.ts';
 
-// Lazy-evaluated to avoid calling homedir() at module scope (breaks in serverless/bundled environments)
-function getConfigDir() { return join(homedir(), '.gbrain'); }
-function getConfigPath() { return join(getConfigDir(), 'config.json'); }
+// Lazy-evaluated to avoid calling homedir() at module scope (breaks in serverless/bundled environments).
+// Internal aliases forward to the exported helpers so GBRAIN_HOME is honored uniformly.
+function getConfigDir() { return configDir(); }
+function getConfigPath() { return configPath(); }
 
 export interface GBrainConfig {
   engine: 'postgres' | 'pglite';
@@ -64,9 +65,26 @@ export function toEngineConfig(config: GBrainConfig): EngineConfig {
 }
 
 export function configDir(): string {
+  // GBRAIN_HOME is a parent dir. We always append `.gbrain` so
+  // GBRAIN_HOME=/tmp/run yields /tmp/run/.gbrain.
+  const override = process.env.GBRAIN_HOME;
+  if (override && override.trim()) {
+    const trimmed = override.trim();
+    if (!trimmed.startsWith('/')) {
+      throw new Error(`GBRAIN_HOME must be an absolute path; got: ${trimmed}`);
+    }
+    if (trimmed.split('/').includes('..')) {
+      throw new Error(`GBRAIN_HOME must not contain parent traversal segments; got: ${trimmed}`);
+    }
+    return join(trimmed, '.gbrain');
+  }
   return join(homedir(), '.gbrain');
 }
 
 export function configPath(): string {
   return join(configDir(), 'config.json');
+}
+
+export function gbrainPath(...segments: string[]): string {
+  return join(configDir(), ...segments);
 }
