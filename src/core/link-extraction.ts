@@ -1,6 +1,7 @@
 import { dirname, join } from 'path';
 import type { BrainEngine } from './engine.ts';
 import type { PageType } from './types.ts';
+import { slugifyPath } from './sync.ts';
 
 export interface EntityRef {
   name: string;
@@ -76,7 +77,23 @@ export function extractEntityRefs(content: string): EntityRef[] {
   return refs;
 }
 
-function extractObsidianRefs(content: string, currentSlug?: string): EntityRef[] {
+function resolveObsidianTarget(targetRaw: string, currentSlug?: string, allSlugs?: Set<string>): string {
+  const explicit = targetRaw.includes('/');
+  const relative = !explicit && currentSlug
+    ? join(dirname(currentSlug), targetRaw).replace(/\\/g, '/')
+    : targetRaw;
+  const direct = slugifyPath(relative);
+  if (!allSlugs) return direct;
+  if (allSlugs.has(direct)) return direct;
+  if (explicit) return direct;
+
+  const basename = slugifyPath(targetRaw).split('/').pop();
+  if (!basename) return direct;
+  const matches = [...allSlugs].filter(slug => slug.split('/').pop() === basename);
+  return matches.length === 1 ? matches[0] : direct;
+}
+
+function extractObsidianRefs(content: string, currentSlug?: string, allSlugs?: Set<string>): EntityRef[] {
   const refs: EntityRef[] = [];
   const stripped = stripCodeBlocks(content);
   const re = /\[\[([^\]]+)\]\]/g;
@@ -91,11 +108,7 @@ function extractObsidianRefs(content: string, currentSlug?: string): EntityRef[]
       .trim()
       .replace(/\.md$/i, '');
     if (!targetRaw) continue;
-    const resolved = targetRaw.includes('/')
-      ? targetRaw
-      : currentSlug
-        ? join(dirname(currentSlug), targetRaw).replace(/\\/g, '/')
-        : targetRaw;
+    const resolved = resolveObsidianTarget(targetRaw, currentSlug, allSlugs);
     refs.push({
       name: label || resolved,
       slug: resolved,
@@ -131,6 +144,7 @@ export function extractPageLinks(
   frontmatter: Record<string, unknown>,
   pageType: PageType,
   currentSlug?: string,
+  allSlugs?: Set<string>,
 ): LinkCandidate[] {
   const candidates: LinkCandidate[] = [];
 
@@ -144,7 +158,7 @@ export function extractPageLinks(
     });
   }
 
-  for (const ref of extractObsidianRefs(content, currentSlug)) {
+  for (const ref of extractObsidianRefs(content, currentSlug, allSlugs)) {
     const idx = content.indexOf(ref.name);
     const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
     candidates.push({

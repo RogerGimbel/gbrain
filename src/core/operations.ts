@@ -166,7 +166,7 @@ async function runAutoLink(
   const fullContent = `${parsed.compiled_truth}\n${parsed.timeline || ''}`;
   const pages = await engine.listPages({ limit: 100000 });
   const allSlugs = new Set(pages.map(page => page.slug));
-  const candidates = extractPageLinks(fullContent, parsed.frontmatter, parsed.type, slug);
+  const candidates = extractPageLinks(fullContent, parsed.frontmatter, parsed.type, slug, allSlugs);
   const valid = candidates.filter(candidate => allSlugs.has(candidate.targetSlug));
   const existing = await engine.getLinks(slug);
   const desiredKeys = new Set(valid.map(candidate => `${candidate.targetSlug}\u0000${candidate.linkType}`));

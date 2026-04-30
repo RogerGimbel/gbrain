@@ -100,6 +100,18 @@ export function extractObsidianWikilinks(content: string): { name: string; targe
   return results;
 }
 
+function resolveWikilinkTarget(target: string, fromDir: string, allSlugs: Set<string>): string | null {
+  const explicit = target.includes('/');
+  const direct = slugifyPath(explicit ? target : join(fromDir, target));
+  if (allSlugs.has(direct)) return direct;
+  if (explicit) return null;
+
+  const basename = slugifyPath(target).split('/').pop();
+  if (!basename) return null;
+  const matches = [...allSlugs].filter(slug => slug.split('/').pop() === basename);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /** Infer link type from directory structure */
 function inferLinkType(fromDir: string, toDir: string, frontmatter?: Record<string, unknown>): string {
   const from = fromDir.split('/')[0];
@@ -168,8 +180,8 @@ export function extractLinksFromFile(
   }
 
   for (const { name, target } of extractObsidianWikilinks(content)) {
-    const resolved = slugifyPath(target.includes('/') ? target : join(fileDir, target));
-    if (allSlugs.has(resolved)) {
+    const resolved = resolveWikilinkTarget(target, fileDir, allSlugs);
+    if (resolved) {
       links.push({
         from_slug: slug, to_slug: resolved,
         link_type: inferLinkType(fileDir, dirname(resolved), fm),
@@ -402,7 +414,7 @@ async function extractLinksFromDB(
     }
 
     const fullContent = `${page.compiled_truth}\n${page.timeline || ''}`;
-    const candidates = extractPageLinks(fullContent, page.frontmatter || {}, page.type as PageType, page.slug);
+    const candidates = extractPageLinks(fullContent, page.frontmatter || {}, page.type as PageType, page.slug, allSlugs);
     for (const candidate of candidates) {
       if (!allSlugs.has(candidate.targetSlug)) continue;
       if (dryRun) {
