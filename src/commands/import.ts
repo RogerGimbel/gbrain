@@ -90,6 +90,9 @@ export async function runImport(engine: BrainEngine, args: string[]) {
       } else {
         skipped++;
         if (result.error && result.error !== 'unchanged') {
+          const errorKey = result.error.replace(/"[^"]*"/g, '""');
+          errorCounts[errorKey] = (errorCounts[errorKey] || 0) + 1;
+          errors++;
           console.error(`  Skipped ${relativePath}: ${result.error}`);
         }
       }
@@ -200,11 +203,13 @@ export async function runImport(engine: BrainEngine, args: string[]) {
 
   // Import → sync continuity: write sync checkpoint if this is a git repo
   try {
-    if (existsSync(join(dir, '.git'))) {
+    if (errors === 0 && existsSync(join(dir, '.git'))) {
       const head = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim();
       await engine.setConfig('sync.last_commit', head);
       await engine.setConfig('sync.last_run', new Date().toISOString());
       await engine.setConfig('sync.repo_path', dir);
+    } else if (errors > 0 && existsSync(join(dir, '.git'))) {
+      console.log(`  Git sync checkpoint not advanced because ${errors} import error(s) must be fixed or re-imported first.`);
     }
   } catch {
     // Not a git repo or git not available, skip checkpoint

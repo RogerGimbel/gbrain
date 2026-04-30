@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, mkdtempSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { gbrainPath } from '../src/core/config.ts';
@@ -146,6 +147,35 @@ describe('import resume checkpoint', () => {
     expect(loaded.totalFiles).toBe(100);
     expect(loaded.processedIndex).toBe(100);
   });
+  test('runImport does not advance git sync checkpoint when any file is skipped with an error', async () => {
+    writeFileSync(join(brainDir, 'good.md'), `---
+type: concept
+title: Good
+---
+
+Good content.
+`);
+    writeFileSync(join(brainDir, 'bad.md'), `---
+type: concept
+title: Bad
+slug: hijacked/slug
+---
+
+This file must be skipped because its slug disagrees with its path.
+`);
+    execFileSync('git', ['-C', brainDir, 'init'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', brainDir, 'add', '.'], { stdio: 'ignore' });
+    execFileSync(
+      'git',
+      ['-C', brainDir, '-c', 'user.email=test@example.com', '-c', 'user.name=GBrain Test', 'commit', '-m', 'fixture'],
+      { stdio: 'ignore' },
+    );
+
+    const engine = makeRecordingEngine();
+    await runImport(engine as any, [brainDir, '--no-embed', '--fresh']);
+
+    expect(engine.setConfigCalls.filter(([key]) => key.startsWith('sync.'))).toEqual([]);
+  });
 });
 
 function mkdirTemp(prefix: string): string {
@@ -160,4 +190,29 @@ function makeFailingEngine() {
     },
     logIngest: async () => {},
   };
+}
+
+function makeRecordingEngine() {
+  const calls: { method: string; args: any[] }[] = [];
+  const setConfigCalls: [string, string][] = [];
+  const engine: any = new Proxy({}, {
+    get(_, prop: string) {
+      if (prop === 'calls') return calls;
+      if (prop === 'setConfigCalls') return setConfigCalls;
+      if (prop === 'getPage') return async () => null;
+      if (prop === 'getTags') return async () => [];
+      if (prop === 'transaction') return async (fn: (tx: any) => Promise<any>) => fn(engine);
+      if (prop === 'logIngest') return async () => {};
+      if (prop === 'setConfig') {
+        return async (key: string, value: string) => {
+          setConfigCalls.push([key, value]);
+        };
+      }
+      return async (...args: any[]) => {
+        calls.push({ method: prop, args });
+        return null;
+      };
+    },
+  });
+  return engine as typeof engine & { setConfigCalls: [string, string][] };
 }
