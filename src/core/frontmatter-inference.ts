@@ -8,8 +8,8 @@
  */
 
 import { basename } from 'path';
-import { readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative } from 'path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { join, relative, resolve } from 'path';
 
 export interface InferredFrontmatter {
   title: string;
@@ -47,6 +47,36 @@ export interface FrontmatterAuditReport {
     byRule: Record<string, number>;
   };
   proposals: FrontmatterAuditProposal[];
+}
+
+export const FRONTMATTER_PATCH_SAFE_PREFIXES = ['briefs/', 'knowledge/projects/'] as const;
+
+export interface FrontmatterPatchOptions {
+  root: string;
+  allowPrefix: string;
+}
+
+export interface FrontmatterPatchEntry {
+  relativePath: string;
+  generatedFrontmatter: string;
+  originalContent: string;
+  patchedContent: string;
+}
+
+export interface FrontmatterPatchPlan {
+  root: string;
+  allowPrefix: string;
+  generatedAt: string;
+  summary: {
+    proposalsInReport: number;
+    selected: number;
+    skippedDisallowedPrefix: number;
+    skippedExistingFrontmatter: number;
+    skippedMissingFile: number;
+    skippedUnsafePath: number;
+  };
+  patches: FrontmatterPatchEntry[];
+  warnings: string[];
 }
 
 // Ordered most-specific first. Local Roger/Winston vault conventions precede
@@ -219,6 +249,130 @@ export function auditFrontmatterDirectory(root: string): FrontmatterAuditReport 
     },
     proposals,
   };
+}
+
+export function createFrontmatterPatchPlan(
+  report: FrontmatterAuditReport,
+  options: FrontmatterPatchOptions,
+): FrontmatterPatchPlan {
+  const root = resolve(options.root);
+  const allowPrefix = normalizeAllowPrefix(options.allowPrefix);
+  if (!FRONTMATTER_PATCH_SAFE_PREFIXES.includes(allowPrefix as typeof FRONTMATTER_PATCH_SAFE_PREFIXES[number])) {
+    throw new Error(`Frontmatter patch prefix ${JSON.stringify(allowPrefix)} is not allowlisted. Allowed: ${FRONTMATTER_PATCH_SAFE_PREFIXES.join(', ')}`);
+  }
+
+  const plan: FrontmatterPatchPlan = {
+    root,
+    allowPrefix,
+    generatedAt: new Date().toISOString(),
+    summary: {
+      proposalsInReport: report.proposals.length,
+      selected: 0,
+      skippedDisallowedPrefix: 0,
+      skippedExistingFrontmatter: 0,
+      skippedMissingFile: 0,
+      skippedUnsafePath: 0,
+    },
+    patches: [],
+    warnings: [],
+  };
+
+  for (const proposal of report.proposals) {
+    const relativePath = normalizeProposalPath(proposal.relativePath);
+    if (!relativePath || isUnsafeRelativePath(relativePath)) {
+      plan.summary.skippedUnsafePath++;
+      plan.warnings.push(`Skipped unsafe path: ${proposal.relativePath}`);
+      continue;
+    }
+
+    if (!relativePath.toLowerCase().startsWith(allowPrefix.toLowerCase())) {
+      plan.summary.skippedDisallowedPrefix++;
+      continue;
+    }
+
+    const absolutePath = resolve(root, relativePath);
+    if (!isPathInsideRoot(root, absolutePath)) {
+      plan.summary.skippedUnsafePath++;
+      plan.warnings.push(`Skipped path outside root: ${relativePath}`);
+      continue;
+    }
+    if (!existsSync(absolutePath) || !statSync(absolutePath).isFile()) {
+      plan.summary.skippedMissingFile++;
+      plan.warnings.push(`Skipped missing file: ${relativePath}`);
+      continue;
+    }
+
+    const originalContent = readFileSync(absolutePath, 'utf-8');
+    if (hasYamlFrontmatter(originalContent)) {
+      plan.summary.skippedExistingFrontmatter++;
+      plan.warnings.push(`Skipped file with existing frontmatter: ${relativePath}`);
+      continue;
+    }
+
+    const generatedFrontmatter = proposal.generatedFrontmatter || serializeFrontmatter(proposal.inferred);
+    const patchedContent = `${generatedFrontmatter}\n${originalContent}`;
+    plan.patches.push({
+      relativePath,
+      generatedFrontmatter,
+      originalContent,
+      patchedContent,
+    });
+    plan.summary.selected++;
+  }
+
+  return plan;
+}
+
+export function renderFrontmatterPatch(plan: FrontmatterPatchPlan): string {
+  const chunks = plan.patches.map(entry => renderInsertionPatch(entry));
+  return chunks.length ? `${chunks.join('\n')}\n` : '';
+}
+
+function renderInsertionPatch(entry: FrontmatterPatchEntry): string {
+  const contextLines = firstLines(entry.originalContent, 6);
+  const insertedLines = splitPatchLines(`${entry.generatedFrontmatter}\n`);
+  const oldCount = contextLines.length;
+  const newCount = insertedLines.length + contextLines.length;
+  const oldRange = oldCount === 1 ? '1' : `1,${oldCount}`;
+  const newRange = newCount === 1 ? '1' : `1,${newCount}`;
+  const lines = [
+    `diff --git a/${entry.relativePath} b/${entry.relativePath}`,
+    `--- a/${entry.relativePath}`,
+    `+++ b/${entry.relativePath}`,
+    `@@ -${oldRange} +${newRange} @@`,
+    ...insertedLines.map(line => `+${line}`),
+    ...contextLines.map(line => ` ${line}`),
+  ];
+  return lines.join('\n');
+}
+
+function normalizeAllowPrefix(prefix: string): string {
+  let normalized = normalizeProposalPath(prefix).replace(/^\.\//, '');
+  if (normalized && !normalized.endsWith('/')) normalized += '/';
+  return normalized;
+}
+
+function normalizeProposalPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function isUnsafeRelativePath(path: string): boolean {
+  if (path.startsWith('/') || path.includes('\0')) return true;
+  return path.split('/').some(part => part === '..');
+}
+
+function isPathInsideRoot(root: string, absolutePath: string): boolean {
+  return absolutePath === root || absolutePath.startsWith(`${root}/`);
+}
+
+function firstLines(content: string, limit: number): string[] {
+  return splitPatchLines(content).slice(0, Math.max(0, limit));
+}
+
+function splitPatchLines(content: string): string[] {
+  const lines = content.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines;
 }
 
 function listMarkdownFiles(root: string): string[] {

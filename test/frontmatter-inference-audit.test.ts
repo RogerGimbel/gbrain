@@ -11,7 +11,9 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import {
   auditFrontmatterDirectory,
+  createFrontmatterPatchPlan,
   inferFrontmatter,
+  renderFrontmatterPatch,
   serializeFrontmatter,
 } from '../src/core/frontmatter-inference.ts';
 
@@ -82,5 +84,56 @@ describe('frontmatter inference audit', () => {
     expect(report.proposals[0].relativePath).toBe('projects/control/project-status/example-app.md');
     expect(report.proposals[0].inferred.type).toBe('project-status');
     expect(report.summary.byType['project-status']).toBe(1);
+  });
+
+  test('creates dry-run patch plan only for an explicit safe allow-prefix', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gbrain-frontmatter-patch-'));
+    const briefPath = join(root, 'briefs/weekly-2026-04-26.md');
+    const projectPath = join(root, 'knowledge/projects/beerpair.md');
+    const memoryPath = join(root, 'memory-archive-2026-Q1/2026-01-29.md');
+    mkdirSync(dirname(briefPath), { recursive: true });
+    mkdirSync(dirname(projectPath), { recursive: true });
+    mkdirSync(dirname(memoryPath), { recursive: true });
+    writeFileSync(briefPath, '# Weekly Summary — 2026-04-26\n\nBrief body.');
+    writeFileSync(projectPath, '# BeerPair\n\nProject body.');
+    writeFileSync(memoryPath, '# 2026-01-29\n\nMemory body.');
+
+    const report = auditFrontmatterDirectory(root);
+    const before = readFileSync(briefPath, 'utf-8');
+    const plan = createFrontmatterPatchPlan(report, { root, allowPrefix: 'briefs/' });
+    const patch = renderFrontmatterPatch(plan);
+
+    expect(readFileSync(briefPath, 'utf-8')).toBe(before);
+    expect(plan.summary.selected).toBe(1);
+    expect(plan.summary.skippedDisallowedPrefix).toBe(2);
+    expect(plan.patches[0].relativePath).toBe('briefs/weekly-2026-04-26.md');
+    expect(patch).toContain('diff --git a/briefs/weekly-2026-04-26.md b/briefs/weekly-2026-04-26.md');
+    expect(patch).toContain('+title: "Weekly Summary — 2026-04-26"');
+    expect(patch).toContain('+tags: ["brief"]');
+    expect(patch).not.toContain('memory-archive-2026-Q1/2026-01-29.md');
+  });
+
+  test('refuses non-allowlisted frontmatter patch prefixes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gbrain-frontmatter-patch-'));
+    writeFileSync(join(root, 'memory-archive-2026-Q1.md'), '# Memory Archive\n');
+    const report = auditFrontmatterDirectory(root);
+
+    expect(() => createFrontmatterPatchPlan(report, { root, allowPrefix: 'memory-archive-2026-Q1/' }))
+      .toThrow('not allowlisted');
+  });
+
+  test('dry-run patch planning fails closed when files drift to existing frontmatter', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gbrain-frontmatter-patch-'));
+    const briefPath = join(root, 'briefs/weekly-2026-04-26.md');
+    mkdirSync(dirname(briefPath), { recursive: true });
+    writeFileSync(briefPath, '# Weekly Summary — 2026-04-26\n\nBrief body.');
+    const report = auditFrontmatterDirectory(root);
+    writeFileSync(briefPath, '---\ntitle: Existing\ntype: checkpoint\n---\n# Weekly Summary — 2026-04-26\n');
+
+    const plan = createFrontmatterPatchPlan(report, { root, allowPrefix: 'briefs/' });
+
+    expect(plan.summary.selected).toBe(0);
+    expect(plan.summary.skippedExistingFrontmatter).toBe(1);
+    expect(plan.patches).toHaveLength(0);
   });
 });

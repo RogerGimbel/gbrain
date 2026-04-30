@@ -18,7 +18,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit']);
+const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply']);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -326,6 +326,11 @@ async function handleCliOnly(command: string, args: string[]) {
     await runFrontmatterAudit(args);
     return;
   }
+  if (command === 'frontmatter-apply') {
+    const { runFrontmatterApply } = await import('./commands/frontmatter-apply.ts');
+    await runFrontmatterApply(args);
+    return;
+  }
 
   // All remaining CLI-only commands need a DB connection
   const engine = await connectEngine();
@@ -509,6 +514,8 @@ TOOLS
   skillpack <list|install|diff|check> List/install bundled skills; run health check
   skillpack-check                    Agent-readable local skillpack health report
   frontmatter-audit <dir> [--json]   Read-only inferred-frontmatter report
+  frontmatter-apply <report.json> --dry-run
+                                      Generate allowlisted frontmatter patch artifact
   publish <page.md> [--password]     Shareable HTML (strips private data, optional AES-256)
   check-backlinks <check|fix> [dir]  Find/fix missing back-links across brain
   lint <dir|file> [--fix]            Catch LLM artifacts, placeholder dates, bad frontmatter
