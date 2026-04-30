@@ -20,6 +20,7 @@
     "build:schema": "bash scripts/build-schema.sh",
     "test": "bun test",
     "test:e2e": "bun test test/e2e/",
+    "baseline:retrieval": "bun scripts/retrieval-baseline.ts",
     "prepublish:clawhub": "bun run build:all",
     "publish:clawhub": "clawhub package publish . --family bundle-plugin"
   },
