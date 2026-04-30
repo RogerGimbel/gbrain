@@ -1,3 +1,14 @@
+import {
+  existsSync as fsExistsSync,
+  readFileSync as fsReadFileSync,
+  appendFileSync as fsAppendFileSync,
+  mkdirSync as fsMkdirSync,
+  writeFileSync as fsWriteFileSync,
+} from 'fs';
+import { dirname } from 'path';
+import { createHash } from 'crypto';
+import { gbrainPath } from './config.ts';
+
 /**
  * Sync utilities — pure functions for git diff parsing, filtering, and slug management.
  *
@@ -132,4 +143,157 @@ export function pathToSlug(filePath: string, repoPrefix?: string): string {
   let slug = slugifyPath(filePath);
   if (repoPrefix) slug = `${repoPrefix}/${slug}`;
   return slug.toLowerCase();
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Sync failure tracking
+// ─────────────────────────────────────────────────────────────────
+
+export interface SyncFailure {
+  path: string;
+  error: string;
+  /** Structured error code extracted from the error message. */
+  code?: string;
+  commit: string;
+  line?: number;
+  ts: string;
+  acknowledged?: boolean;
+  acknowledged_at?: string;
+}
+
+export function classifyErrorCode(errorMsg: string): string {
+  if (/slug.*does not match|SLUG_MISMATCH/i.test(errorMsg)) return 'SLUG_MISMATCH';
+
+  // DB-layer errors before YAML duplicate-key so Postgres unique-constraint
+  // messages are not mislabeled as frontmatter syntax errors.
+  if (/duplicate key value violates unique constraint|DB_DUPLICATE_KEY/i.test(errorMsg)) return 'DB_DUPLICATE_KEY';
+  if (/canceling statement due to statement timeout|STATEMENT_TIMEOUT/i.test(errorMsg)) return 'STATEMENT_TIMEOUT';
+
+  if (/YAML parse failed|YAML_PARSE/i.test(errorMsg)) return 'YAML_PARSE';
+  if (/YAMLException|duplicated mapping key|YAML_DUPLICATE_KEY/i.test(errorMsg)) return 'YAML_DUPLICATE_KEY';
+  if (/File is empty or whitespace-only|Frontmatter must start with ---|MISSING_OPEN/i.test(errorMsg)) return 'MISSING_OPEN';
+  if (/No closing --- delimiter|Heading at line .* found inside frontmatter|MISSING_CLOSE/i.test(errorMsg)) return 'MISSING_CLOSE';
+  if (/Frontmatter block is empty|EMPTY_FRONTMATTER/i.test(errorMsg)) return 'EMPTY_FRONTMATTER';
+  if (/Content contains null bytes|NULL_BYTES|null byte/i.test(errorMsg)) return 'NULL_BYTES';
+  if (/Nested double quotes|NESTED_QUOTES/i.test(errorMsg)) return 'NESTED_QUOTES';
+  if (/invalid UTF-?8|INVALID_UTF8/i.test(errorMsg)) return 'INVALID_UTF8';
+  if (/file too large|content too large|FILE_TOO_LARGE/i.test(errorMsg)) return 'FILE_TOO_LARGE';
+  if (/skipping symlink|symlink|SYMLINK_NOT_ALLOWED/i.test(errorMsg)) return 'SYMLINK_NOT_ALLOWED';
+
+  return 'UNKNOWN';
+}
+
+export function summarizeFailuresByCode(
+  failures: Array<{ error: string; code?: string }>,
+): Array<{ code: string; count: number }> {
+  const counts: Record<string, number> = {};
+  for (const failure of failures) {
+    const code = failure.code ?? classifyErrorCode(failure.error);
+    counts[code] = (counts[code] ?? 0) + 1;
+  }
+  return Object.entries(counts)
+    .sort(([, a], [, b]) => b - a)
+    .map(([code, count]) => ({ code, count }));
+}
+
+export function formatCodeBreakdown(
+  input: Array<{ error: string; code?: string }> | Array<{ code: string; count: number }>,
+): string {
+  const summary = input.length > 0 && typeof (input[0] as { count?: unknown }).count === 'number'
+    ? (input as Array<{ code: string; count: number }>)
+    : summarizeFailuresByCode(input as Array<{ error: string; code?: string }>);
+  return summary.map(s => `  ${s.code}: ${s.count}`).join('\n');
+}
+
+export function syncFailuresPath(): string {
+  return gbrainPath('sync-failures.jsonl');
+}
+
+function hashError(msg: string): string {
+  return createHash('sha256').update(msg).digest('hex').slice(0, 12);
+}
+
+function dedupKey(f: { path: string; commit: string; error: string }): string {
+  return `${f.path}|${f.commit}|${hashError(f.error)}`;
+}
+
+export function loadSyncFailures(): SyncFailure[] {
+  const path = syncFailuresPath();
+  if (!fsExistsSync(path)) return [];
+
+  const out: SyncFailure[] = [];
+  for (const line of fsReadFileSync(path, 'utf-8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      out.push(JSON.parse(trimmed) as SyncFailure);
+    } catch {
+      console.warn(`[sync-failures] skipping malformed line: ${trimmed.slice(0, 120)}`);
+    }
+  }
+  return out;
+}
+
+export function recordSyncFailures(
+  failures: Array<{ path: string; error: string; line?: number }>,
+  commit: string,
+): void {
+  if (failures.length === 0) return;
+
+  const existing = loadSyncFailures();
+  const seen = new Set(existing.map(f => dedupKey(f)));
+  const now = new Date().toISOString();
+  const path = syncFailuresPath();
+  fsMkdirSync(dirname(path), { recursive: true });
+
+  for (const failure of failures) {
+    const entry: SyncFailure = {
+      path: failure.path,
+      error: failure.error,
+      code: classifyErrorCode(failure.error),
+      commit,
+      line: failure.line,
+      ts: now,
+    };
+    const key = dedupKey(entry);
+    if (seen.has(key)) continue;
+    fsAppendFileSync(path, JSON.stringify(entry) + '\n');
+    seen.add(key);
+  }
+}
+
+export interface AcknowledgeResult {
+  count: number;
+  summary: Array<{ code: string; count: number }>;
+}
+
+export function acknowledgeSyncFailures(): AcknowledgeResult {
+  const entries = loadSyncFailures();
+  if (entries.length === 0) return { count: 0, summary: [] };
+
+  const now = new Date().toISOString();
+  let changed = 0;
+  const newlyAcked: SyncFailure[] = [];
+  const updated = entries.map(entry => {
+    if (entry.acknowledged) return entry;
+    changed++;
+    const acknowledged = {
+      ...entry,
+      code: entry.code ?? classifyErrorCode(entry.error),
+      acknowledged: true,
+      acknowledged_at: now,
+    };
+    newlyAcked.push(acknowledged);
+    return acknowledged;
+  });
+
+  if (changed === 0) return { count: 0, summary: [] };
+  const path = syncFailuresPath();
+  fsMkdirSync(dirname(path), { recursive: true });
+  fsWriteFileSync(path, updated.map(entry => JSON.stringify(entry)).join('\n') + '\n');
+  return { count: changed, summary: summarizeFailuresByCode(newlyAcked) };
+}
+
+export function unacknowledgedSyncFailures(): SyncFailure[] {
+  return loadSyncFailures().filter(f => !f.acknowledged);
 }

@@ -3,11 +3,18 @@ import { execFileSync } from 'child_process';
 import { join, relative } from 'path';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFile } from '../core/import-file.ts';
-import { buildSyncManifest, isSyncable, pathToSlug } from '../core/sync.ts';
+import {
+  acknowledgeSyncFailures,
+  buildSyncManifest,
+  formatCodeBreakdown,
+  isSyncable,
+  pathToSlug,
+  recordSyncFailures,
+} from '../core/sync.ts';
 import type { SyncManifest } from '../core/sync.ts';
 
 export interface SyncResult {
-  status: 'up_to_date' | 'synced' | 'first_sync' | 'dry_run';
+  status: 'up_to_date' | 'synced' | 'first_sync' | 'dry_run' | 'blocked_by_failures';
   fromCommit: string | null;
   toCommit: string;
   added: number;
@@ -16,6 +23,7 @@ export interface SyncResult {
   renamed: number;
   chunksCreated: number;
   pagesAffected: string[];
+  failedFiles?: number;
 }
 
 export interface SyncOpts {
@@ -25,6 +33,7 @@ export interface SyncOpts {
   noPull?: boolean;
   noEmbed?: boolean;
   noExtract?: boolean;
+  skipFailed?: boolean;
 }
 
 function git(repoPath: string, ...args: string[]): string {
@@ -204,7 +213,7 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
   }
 
   // Process adds and modifies
-  const useTransaction = (filtered.added.length + filtered.modified.length) > 10;
+  const failedFiles: Array<{ path: string; error: string; line?: number }> = [];
   const processAddsModifies = async () => {
     for (const path of [...filtered.added, ...filtered.modified]) {
       const filePath = join(repoPath, path);
@@ -214,21 +223,56 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
         if (result.status === 'imported') {
           chunksCreated += result.chunks;
           pagesAffected.push(result.slug);
+        } else if (result.status === 'skipped' && result.error) {
+          failedFiles.push({ path, error: result.error });
+        } else if (result.status === 'error' && result.error) {
+          failedFiles.push({ path, error: result.error });
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`  Warning: skipped ${path}: ${msg}`);
+        failedFiles.push({ path, error: msg });
       }
     }
   };
 
-  if (useTransaction) {
-    await engine.transaction(async () => { await processAddsModifies(); });
-  } else {
-    await processAddsModifies();
-  }
+  await processAddsModifies();
 
   const elapsed = Date.now() - start;
+
+  if (failedFiles.length > 0) {
+    recordSyncFailures(failedFiles, headCommit);
+    const codeBreakdown = formatCodeBreakdown(failedFiles);
+    if (!opts.skipFailed) {
+      console.error(
+        `\nSync blocked: ${failedFiles.length} file(s) failed to parse:\n` +
+        `${codeBreakdown}\n\n` +
+        `Fix the files above and re-run, or use 'gbrain sync --skip-failed' to acknowledge and move on.`,
+      );
+      await engine.setConfig('sync.last_run', new Date().toISOString());
+      await engine.setConfig('sync.repo_path', repoPath);
+      return {
+        status: 'blocked_by_failures',
+        fromCommit: lastCommit,
+        toCommit: headCommit,
+        added: filtered.added.length,
+        modified: filtered.modified.length,
+        deleted: filtered.deleted.length,
+        renamed: filtered.renamed.length,
+        chunksCreated,
+        pagesAffected,
+        failedFiles: failedFiles.length,
+      };
+    }
+
+    const acked = acknowledgeSyncFailures();
+    if (acked.count > 0) {
+      console.error(
+        `  Acknowledged ${acked.count} failure(s) and advancing past them:\n` +
+        `${formatCodeBreakdown(acked.summary)}`,
+      );
+    }
+  }
 
   // Update sync state AFTER all changes succeed
   await engine.setConfig('sync.last_commit', headCommit);
@@ -322,8 +366,9 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   const full = args.includes('--full');
   const noPull = args.includes('--no-pull');
   const noEmbed = args.includes('--no-embed');
+  const skipFailed = args.includes('--skip-failed');
 
-  const opts: SyncOpts = { repoPath, dryRun, full, noPull, noEmbed };
+  const opts: SyncOpts = { repoPath, dryRun, full, noPull, noEmbed, skipFailed };
 
   if (!watch) {
     const result = await performSync(engine, opts);
@@ -371,5 +416,10 @@ function printSyncResult(result: SyncResult) {
       break;
     case 'dry_run':
       break; // already printed in performSync
+    case 'blocked_by_failures':
+      console.log(`Sync BLOCKED at ${result.toCommit.slice(0, 8)}: ${result.failedFiles ?? 0} file(s) failed to parse.`);
+      console.log(`  See ~/.gbrain/sync-failures.jsonl for details, or run 'gbrain doctor'.`);
+      console.log(`  Fix the files then re-run 'gbrain sync', or 'gbrain sync --skip-failed' to move on.`);
+      break;
   }
 }
