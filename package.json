@@ -22,6 +22,7 @@
     "test": "bash scripts/check-privacy.sh && bun test",
     "test:e2e": "bun test test/e2e/",
     "baseline:retrieval": "bun scripts/retrieval-baseline.ts",
+    "gate:golden-memory": "bun scripts/golden-memory-gate.ts",
     "prepublish:clawhub": "bun run build:all",
     "publish:clawhub": "clawhub package publish . --family bundle-plugin"
   },
