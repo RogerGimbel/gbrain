@@ -52,6 +52,35 @@ export interface DreamSandboxEvaluation {
   recommendations: string[];
 }
 
+export type DreamSandboxDecisionRecommendation = 'promote' | 'park' | 'discard';
+
+export interface DreamSandboxBatchDecisionOptions {
+  inputs: string[];
+  outputRoot: string;
+  dryRun?: boolean;
+  canonicalRoot?: string;
+}
+
+export interface DreamSandboxBatchDecisionEntry {
+  result: DreamSandboxResult;
+  evaluation: DreamSandboxEvaluation;
+}
+
+export interface DreamSandboxBatchDecisionReport {
+  generatedAt: string;
+  fixtureCount: number;
+  overallRecommendation: DreamSandboxDecisionRecommendation;
+  reason: string;
+  aggregate: {
+    passes: number;
+    deferred: number;
+    failures: number;
+    sideEffects: DreamSandboxSideEffects;
+  };
+  results: DreamSandboxBatchDecisionEntry[];
+  nextSteps: string[];
+}
+
 export function assertSafeDreamSandboxRoot(
   outputRoot: string,
   canonicalRoot = DEFAULT_CANONICAL_OBSIDIAN_ROOT,
@@ -228,6 +257,122 @@ export function evaluateDreamSandbox(result: DreamSandboxResult): DreamSandboxEv
       'If the format is useful, next add fixture-based quality cases for real session patterns before any live integration.',
     ],
   };
+}
+
+export function runDreamSandboxBatchDecision(opts: DreamSandboxBatchDecisionOptions): DreamSandboxBatchDecisionReport {
+  if (!opts.inputs || opts.inputs.length === 0) throw new Error('At least one --input fixture is required');
+  assertSafeDreamSandboxRoot(opts.outputRoot, opts.canonicalRoot);
+
+  const results = opts.inputs.map(input => {
+    const result = runDreamSandbox({
+      input,
+      outputRoot: opts.outputRoot,
+      dryRun: opts.dryRun,
+      canonicalRoot: opts.canonicalRoot,
+    });
+    return { result, evaluation: evaluateDreamSandbox(result) };
+  });
+
+  const aggregate = results.reduce((acc, entry) => {
+    for (const check of entry.evaluation.upstreamGoalChecks) {
+      if (check.status === 'pass') acc.passes += 1;
+      if (check.status === 'deferred') acc.deferred += 1;
+      if (check.status === 'fail') acc.failures += 1;
+    }
+    acc.sideEffects.llmCalls += entry.result.sideEffects.llmCalls;
+    acc.sideEffects.minionJobs += entry.result.sideEffects.minionJobs;
+    acc.sideEffects.liveDbWrites += entry.result.sideEffects.liveDbWrites;
+    acc.sideEffects.canonicalVaultWrites += entry.result.sideEffects.canonicalVaultWrites;
+    return acc;
+  }, {
+    passes: 0,
+    deferred: 0,
+    failures: 0,
+    sideEffects: {
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 0,
+    } as DreamSandboxSideEffects,
+  });
+
+  const overallRecommendation: DreamSandboxDecisionRecommendation = aggregate.failures > 0
+    ? 'discard'
+    : aggregate.deferred > 0
+      ? 'park'
+      : 'promote';
+  const reason = overallRecommendation === 'discard'
+    ? 'At least one real-session fixture failed a safety or quality gate.'
+    : overallRecommendation === 'park'
+      ? 'Real-session fixtures stayed safe, but critical goals remain deferred; do not call this implemented yet.'
+      : 'All fixture gates passed with no critical deferrals; a reviewed promotion path can be designed next.';
+  const nextSteps = overallRecommendation === 'park'
+    ? [
+      'Do not promote dream synthesis to live GBrain or canonical Obsidian yet.',
+      'Keep this as Step 6 sandbox evidence rather than an implemented feature.',
+      'If continuing, add read-only GBrain search/cross-reference evaluation in another sandbox-only slice.',
+      'Require explicit human approval before any LLM calls, minion jobs, live DB writes, or canonical vault writes.',
+    ]
+    : overallRecommendation === 'discard'
+      ? [
+        'Remove or quarantine the sandbox code before it becomes dead production surface.',
+        'Do not add a write path or LLM/minion integration.',
+      ]
+      : [
+        'Design a dry-run promotion patch path with rollback artifacts.',
+        'Run retrieval baseline before and after any staged promotion.',
+        'Require human review before canonical writes.',
+      ];
+
+  return {
+    generatedAt: new Date().toISOString(),
+    fixtureCount: results.length,
+    overallRecommendation,
+    reason,
+    aggregate,
+    results,
+    nextSteps,
+  };
+}
+
+export function renderDreamSandboxBatchDecisionMarkdown(report: DreamSandboxBatchDecisionReport): string {
+  const lines: string[] = [];
+  lines.push('# Dream Sandbox Decision Gate');
+  lines.push('');
+  lines.push(`- Recommendation: \`${report.overallRecommendation}\``);
+  lines.push(`- Reason: ${report.reason}`);
+  lines.push(`- Fixture count: ${report.fixtureCount}`);
+  lines.push(`- Generated at: \`${report.generatedAt}\``);
+  lines.push('');
+  lines.push('## Aggregate checks');
+  lines.push('');
+  lines.push(`- Passed checks: ${report.aggregate.passes}`);
+  lines.push(`- Deferred checks: ${report.aggregate.deferred}`);
+  lines.push(`- Failed checks: ${report.aggregate.failures}`);
+  lines.push(`- LLM calls: ${report.aggregate.sideEffects.llmCalls}`);
+  lines.push(`- Minion/subagent jobs: ${report.aggregate.sideEffects.minionJobs}`);
+  lines.push(`- Live GBrain DB writes: ${report.aggregate.sideEffects.liveDbWrites}`);
+  lines.push(`- Canonical Obsidian writes: ${report.aggregate.sideEffects.canonicalVaultWrites}`);
+  lines.push('');
+  lines.push('## Fixture results');
+  lines.push('');
+  for (const [idx, entry] of report.results.entries()) {
+    lines.push(`### Fixture ${idx + 1}: ${basename(entry.result.input)}`);
+    lines.push('');
+    lines.push(`- Status: \`${entry.evaluation.overallStatus}\``);
+    lines.push(`- Slug: \`${entry.result.slug}\``);
+    lines.push(`- Output: \`${entry.result.outputPath}\``);
+    lines.push(`- Bytes: ${entry.result.transcriptBytes}`);
+    lines.push('- Goal checks:');
+    for (const check of entry.evaluation.upstreamGoalChecks) {
+      lines.push(`  - ${check.id}: \`${check.status}\` — ${check.finding}`);
+    }
+    lines.push('');
+  }
+  lines.push('## Next steps');
+  lines.push('');
+  for (const step of report.nextSteps) lines.push(`- ${step}`);
+  return lines.join('\n');
 }
 
 export function renderDreamSandboxEvaluationMarkdown(evaluation: DreamSandboxEvaluation): string {

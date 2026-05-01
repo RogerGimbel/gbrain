@@ -6,8 +6,10 @@ import {
   assertSafeDreamSandboxRoot,
   evaluateDreamSandbox,
   planDreamSandbox,
+  renderDreamSandboxBatchDecisionMarkdown,
   renderDreamSandboxEvaluationMarkdown,
   runDreamSandbox,
+  runDreamSandboxBatchDecision,
 } from '../src/core/dream-sandbox.ts';
 
 function makeTmpDir(prefix = 'gbrain-dream-sandbox-test-'): string {
@@ -174,6 +176,74 @@ describe('dream synthesis sandbox', () => {
     expect(parsed.evaluation.overallStatus).toBe('sandbox-pass-needs-human-review');
     expect(existsSync(reportPath)).toBe(true);
     expect(readFileSync(reportPath, 'utf8')).toContain('## Upstream goal comparison');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('aggregates multiple real-pattern fixtures into a park decision when critical goals remain deferred', () => {
+    const root = makeTmpDir();
+    const outputRoot = join(root, 'sandbox-output');
+    const inputs = [
+      makeTranscript(root, '2026-04-23-hermes-upgrade-gpt55.txt'),
+      makeTranscript(root, '2026-04-24-context-cap-fail-closed.txt'),
+      makeTranscript(root, '2026-04-30-gbrain-frontmatter-review.txt'),
+      makeTranscript(root, '2026-04-30-dream-sandbox-decision.txt'),
+    ];
+
+    const report = runDreamSandboxBatchDecision({ inputs, outputRoot, dryRun: false });
+
+    expect(report.fixtureCount).toBe(4);
+    expect(report.overallRecommendation).toBe('park');
+    expect(report.aggregate.failures).toBe(0);
+    expect(report.aggregate.deferred).toBeGreaterThan(0);
+    expect(report.aggregate.sideEffects).toEqual({
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 0,
+    });
+    expect(report.results.every(r => r.result.slug.startsWith('experiments/dreams/'))).toBe(true);
+    expect(report.results.every(r => existsSync(r.result.outputPath))).toBe(true);
+    expect(report.nextSteps.join('\n')).toContain('Do not promote dream synthesis');
+
+    const markdown = renderDreamSandboxBatchDecisionMarkdown(report);
+    expect(markdown).toContain('# Dream Sandbox Decision Gate');
+    expect(markdown).toContain('Recommendation: `park`');
+    expect(markdown).toContain('cross-reference-existing-brain');
+    expect(markdown).toContain('Fixture count: 4');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('CLI can write a batch decision report from multiple inputs without database access', async () => {
+    const root = makeTmpDir();
+    const outputRoot = join(root, 'sandbox-output');
+    const reportPath = join(root, 'decision-report.md');
+    const first = makeTranscript(root, '2026-04-23-hermes-upgrade-gpt55.txt');
+    const second = makeTranscript(root, '2026-04-30-dream-sandbox-decision.txt');
+
+    const proc = Bun.spawn([
+      'bun', 'run', 'src/cli.ts', 'dream-sandbox',
+      '--input', first,
+      '--input', second,
+      '--output', outputRoot,
+      '--write-decision', reportPath,
+      '--json',
+    ], {
+      cwd: new URL('..', import.meta.url).pathname,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(0);
+    expect(stderr).toBe('');
+    const parsed = JSON.parse(stdout);
+    expect(parsed.decisionReportPath).toBe(reportPath);
+    expect(parsed.decisionReport.fixtureCount).toBe(2);
+    expect(parsed.decisionReport.overallRecommendation).toBe('park');
+    expect(existsSync(reportPath)).toBe(true);
+    expect(readFileSync(reportPath, 'utf8')).toContain('Recommendation: `park`');
 
     rmSync(root, { recursive: true, force: true });
   });

@@ -3,17 +3,20 @@ import { dirname } from 'path';
 import {
   assertSafeDreamSandboxRoot,
   evaluateDreamSandbox,
+  renderDreamSandboxBatchDecisionMarkdown,
   renderDreamSandboxEvaluationMarkdown,
   runDreamSandbox,
+  runDreamSandboxBatchDecision,
 } from '../core/dream-sandbox.ts';
 
 interface ParsedDreamSandboxArgs {
-  input?: string;
+  inputs: string[];
   outputRoot?: string;
   dryRun: boolean;
   json: boolean;
   canonicalRoot?: string;
   writeEval?: string;
+  writeDecision?: string;
 }
 
 function printDreamSandboxHelp(): void {
@@ -34,12 +37,13 @@ Options:
   --dry-run                   Render the artifact plan without writing files
   --json                      Emit machine-readable JSON
   --write-eval <file.md>      Write a sandbox-only evaluation report artifact
+  --write-decision <file.md>  Write batch promote/park/discard decision report
   --canonical-root <dir>      Canonical vault root to refuse (default: Roger's Winston vault)
 `);
 }
 
 function parseArgs(args: string[]): ParsedDreamSandboxArgs {
-  const parsed: ParsedDreamSandboxArgs = { dryRun: false, json: false };
+  const parsed: ParsedDreamSandboxArgs = { inputs: [], dryRun: false, json: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     switch (arg) {
@@ -48,7 +52,7 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
         printDreamSandboxHelp();
         process.exit(0);
       case '--input':
-        parsed.input = args[++i];
+        parsed.inputs.push(args[++i]);
         break;
       case '--output':
         parsed.outputRoot = args[++i];
@@ -62,6 +66,9 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
       case '--write-eval':
         parsed.writeEval = args[++i];
         break;
+      case '--write-decision':
+        parsed.writeDecision = args[++i];
+        break;
       case '--canonical-root':
         parsed.canonicalRoot = args[++i];
         break;
@@ -74,11 +81,11 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
 
 export async function runDreamSandboxCommand(args: string[]): Promise<void> {
   const parsed = parseArgs(args);
-  if (!parsed.input) throw new Error('Missing required --input <file>');
+  if (parsed.inputs.length === 0) throw new Error('Missing required --input <file>');
   if (!parsed.outputRoot) throw new Error('Missing required --output <dir>');
 
   const result = runDreamSandbox({
-    input: parsed.input,
+    input: parsed.inputs[0],
     outputRoot: parsed.outputRoot,
     dryRun: parsed.dryRun,
     canonicalRoot: parsed.canonicalRoot,
@@ -90,6 +97,23 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
     assertSafeDreamSandboxRoot(dirname(evaluationPath), parsed.canonicalRoot);
     mkdirSync(dirname(evaluationPath), { recursive: true });
     writeFileSync(evaluationPath, renderDreamSandboxEvaluationMarkdown(evaluation), 'utf8');
+  }
+
+  let decisionReport;
+  let decisionReportPath: string | undefined;
+  if (parsed.writeDecision || parsed.inputs.length > 1) {
+    decisionReport = runDreamSandboxBatchDecision({
+      inputs: parsed.inputs,
+      outputRoot: parsed.outputRoot,
+      dryRun: parsed.dryRun,
+      canonicalRoot: parsed.canonicalRoot,
+    });
+    if (parsed.writeDecision) {
+      decisionReportPath = parsed.writeDecision;
+      assertSafeDreamSandboxRoot(dirname(decisionReportPath), parsed.canonicalRoot);
+      mkdirSync(dirname(decisionReportPath), { recursive: true });
+      writeFileSync(decisionReportPath, renderDreamSandboxBatchDecisionMarkdown(decisionReport), 'utf8');
+    }
   }
 
   if (parsed.json) {
@@ -105,6 +129,8 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
       sideEffects: result.sideEffects,
       evaluation,
       evaluationPath,
+      decisionReport,
+      decisionReportPath,
     }, null, 2));
     return;
   }
@@ -113,6 +139,8 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
     `Dream sandbox ${result.written ? 'wrote' : 'planned'}: ${result.slug}`,
     `Output: ${result.outputPath}`,
     evaluationPath ? `Evaluation: ${evaluationPath}` : undefined,
+    decisionReport ? `Decision: ${decisionReport.overallRecommendation}` : undefined,
+    decisionReportPath ? `Decision report: ${decisionReportPath}` : undefined,
     `Transcript bytes: ${result.transcriptBytes}`,
     `Evaluation status: ${evaluation.overallStatus}`,
     'Side effects: llm=0 minions=0 live_db=0 canonical_vault=0',
