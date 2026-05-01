@@ -108,6 +108,34 @@ export interface DreamSandboxBatchDecisionReport {
   nextSteps: string[];
 }
 
+export interface DreamSandboxPromotionPacketOptions {
+  result: DreamSandboxResult;
+  evaluation: DreamSandboxEvaluation;
+  packetRoot: string;
+  canonicalRoot?: string;
+}
+
+export interface DreamSandboxPromotionPacketFiles {
+  transcript: string;
+  sandboxArtifact: string;
+  xrefEvidence: string;
+  canonicalNoteDraft: string;
+  linksProposed: string;
+  conflictsAndDuplicates: string;
+  promotionSummary: string;
+  humanDecision: string;
+  manifest: string;
+}
+
+export interface DreamSandboxPromotionPacket {
+  status: 'dry-run-review-only';
+  packetRoot: string;
+  sourceSlug: string;
+  contentHash: string;
+  files: DreamSandboxPromotionPacketFiles;
+  sideEffects: DreamSandboxSideEffects;
+}
+
 export function assertSafeDreamSandboxRoot(
   outputRoot: string,
   canonicalRoot = DEFAULT_CANONICAL_OBSIDIAN_ROOT,
@@ -449,6 +477,196 @@ export function renderDreamSandboxBatchDecisionMarkdown(report: DreamSandboxBatc
   lines.push('');
   for (const step of report.nextSteps) lines.push(`- ${step}`);
   return lines.join('\n');
+}
+
+function flattenCrossReferenceHits(evaluation: DreamSandboxEvaluation): DreamSandboxCrossReferenceHit[] {
+  return evaluation.crossReferences?.queries.flatMap(query => query.results) ?? [];
+}
+
+function renderPromotionDraft(result: DreamSandboxResult, evaluation: DreamSandboxEvaluation): string {
+  const transcript = readFileSync(result.input, 'utf8');
+  const hits = flattenCrossReferenceHits(evaluation);
+  const candidateLines = hits.length === 0
+    ? ['- No read-only candidate references supplied; keep this packet parked.']
+    : hits.map(hit => `- \`${hit.slug}\` — ${hit.title} (${hit.type}, score ${hit.score})`);
+  const summary = excerpt(transcript, 500).replace(/```/g, '``\\`');
+  return [
+    '---',
+    `title: ${yamlString(`Draft promotion review — ${basename(result.input).replace(/\.[^.]+$/, '')}`)}`,
+    'type: source',
+    'status: draft-promotion-review',
+    'source: dream-sandbox',
+    'promotion_mode: dry-run',
+    `source_path: ${yamlString(result.input)}`,
+    `source_slug: ${yamlString(result.slug)}`,
+    `content_hash: ${yamlString(result.contentHash)}`,
+    `generated_at: ${yamlString(new Date().toISOString())}`,
+    '---',
+    '',
+    '# Draft promotion review',
+    '',
+    'Status: dry-run review only. This is not canonical memory and has not been synced, embedded, or written to live GBrain.',
+    '',
+    '## Derived summary draft',
+    '',
+    summary,
+    '',
+    '## Verbatim source excerpt',
+    '',
+    '```text',
+    excerpt(transcript, 900),
+    '```',
+    '',
+    '## Candidate existing pages checked before new-page creation',
+    '',
+    ...candidateLines,
+    '',
+    '## Human review required',
+    '',
+    '- [ ] The artifact captures durable memory, not transient task progress.',
+    '- [ ] Summary is accurate and not over-synthesized.',
+    '- [ ] Quotes are verbatim and not misattributed.',
+    '- [ ] Existing pages were checked before proposing a new page.',
+    '- [ ] Links are useful and not graph spam.',
+    '- [ ] Reviewer selected promote, revise, park, or discard.',
+    '',
+    '## Safety side effects',
+    '',
+    `- LLM calls: ${evaluation.sideEffects.llmCalls}`,
+    `- Minion/subagent jobs: ${evaluation.sideEffects.minionJobs}`,
+    `- Live GBrain DB writes: ${evaluation.sideEffects.liveDbWrites}`,
+    `- Canonical Obsidian writes: ${evaluation.sideEffects.canonicalVaultWrites}`,
+  ].join('\n');
+}
+
+function renderPromotionLinks(result: DreamSandboxResult, evaluation: DreamSandboxEvaluation): string {
+  const links = flattenCrossReferenceHits(evaluation).map(hit => ({
+    from_slug: result.slug,
+    to_slug: hit.slug,
+    link_type: 'references-candidate',
+    evidence_query: hit.query,
+    evidence_score: hit.score,
+    reason: `Read-only cross-reference candidate from query ${JSON.stringify(hit.query)}; human review required before any link write.`,
+    action: 'review-ambiguous',
+  }));
+  return JSON.stringify(links, null, 2) + '\n';
+}
+
+function renderPromotionConflicts(evaluation: DreamSandboxEvaluation): string {
+  const hits = flattenCrossReferenceHits(evaluation);
+  const lines: string[] = [];
+  lines.push('# Conflicts and duplicates');
+  lines.push('');
+  lines.push('Status: dry-run review only. No canonical writes have been made.');
+  lines.push('');
+  lines.push('## Likely duplicate or update candidates');
+  lines.push('');
+  if (hits.length === 0) {
+    lines.push('- No candidate references were supplied; do not promote until read-only search evidence exists.');
+  } else {
+    for (const hit of hits) lines.push(`- \`${hit.slug}\` — ${hit.title} (${hit.type}, score ${hit.score})`);
+  }
+  lines.push('');
+  lines.push('## Reasons to discard instead of promote');
+  lines.push('');
+  lines.push('- The item is a transient execution log rather than durable memory.');
+  lines.push('- Candidate existing pages already cover the fact.');
+  lines.push('- Proposed links would add graph noise.');
+  lines.push('- Human reviewer cannot verify the quote or summary.');
+  return lines.join('\n');
+}
+
+function renderPromotionSummary(packetRoot: string, result: DreamSandboxResult, evaluation: DreamSandboxEvaluation): string {
+  const crossReferenceCheck = evaluation.upstreamGoalChecks.find(check => check.id === 'cross-reference-existing-brain');
+  return [
+    '# Promotion packet summary',
+    '',
+    `- Status: \`dry-run-review-only\``,
+    `- Packet root: \`${packetRoot}\``,
+    `- Source slug: \`${result.slug}\``,
+    `- Content hash: \`${result.contentHash}\``,
+    `- Evaluation status: \`${evaluation.overallStatus}\``,
+    `- Cross-reference gate: \`${crossReferenceCheck?.status ?? 'unknown'}\``,
+    '',
+    '## Side effects',
+    '',
+    '- LLM calls: 0',
+    '- Minion/subagent jobs: 0',
+    '- Live GBrain DB writes: 0',
+    '- Canonical Obsidian writes: 0',
+    '',
+    '## Recommendation',
+    '',
+    'Do not apply this packet automatically. Roger must choose promote, revise, park, or discard before any later apply slice.',
+  ].join('\n');
+}
+
+function renderHumanDecision(): string {
+  return [
+    '# Human decision',
+    '',
+    'Decision: pending-human-review',
+    '',
+    'Allowed decisions:',
+    '',
+    '- promote — approve a later one-packet apply slice',
+    '- revise — regenerate with narrower scope or corrected links',
+    '- park — keep as sandbox evidence only',
+    '- discard — ignore or remove this packet',
+    '',
+    'Reviewer notes:',
+    '',
+    '- ',
+  ].join('\n');
+}
+
+export function runDreamSandboxPromotionPacket(opts: DreamSandboxPromotionPacketOptions): DreamSandboxPromotionPacket {
+  if (!opts.packetRoot) throw new Error('--write-promotion-packet is required');
+  const packetRoot = resolve(opts.packetRoot);
+  assertSafeDreamSandboxRoot(packetRoot, opts.canonicalRoot);
+  const inputDir = join(packetRoot, 'input');
+  const proposedDir = join(packetRoot, 'proposed');
+  const reviewDir = join(packetRoot, 'review');
+  mkdirSync(inputDir, { recursive: true });
+  mkdirSync(proposedDir, { recursive: true });
+  mkdirSync(reviewDir, { recursive: true });
+
+  const files: DreamSandboxPromotionPacketFiles = {
+    transcript: join(inputDir, 'transcript.txt'),
+    sandboxArtifact: join(inputDir, 'sandbox-artifact.md'),
+    xrefEvidence: join(inputDir, 'xref-evidence.json'),
+    canonicalNoteDraft: join(proposedDir, 'canonical-note-draft.md'),
+    linksProposed: join(proposedDir, 'links-proposed.json'),
+    conflictsAndDuplicates: join(proposedDir, 'conflicts-and-duplicates.md'),
+    promotionSummary: join(proposedDir, 'promotion-summary.md'),
+    humanDecision: join(reviewDir, 'human-decision.md'),
+    manifest: join(packetRoot, 'manifest.json'),
+  };
+
+  writeFileSync(files.transcript, readFileSync(opts.result.input, 'utf8'), 'utf8');
+  writeFileSync(files.sandboxArtifact, opts.result.markdown, 'utf8');
+  writeFileSync(files.xrefEvidence, JSON.stringify(opts.evaluation.crossReferences ?? null, null, 2) + '\n', 'utf8');
+  writeFileSync(files.canonicalNoteDraft, renderPromotionDraft(opts.result, opts.evaluation), 'utf8');
+  writeFileSync(files.linksProposed, renderPromotionLinks(opts.result, opts.evaluation), 'utf8');
+  writeFileSync(files.conflictsAndDuplicates, renderPromotionConflicts(opts.evaluation), 'utf8');
+  writeFileSync(files.promotionSummary, renderPromotionSummary(packetRoot, opts.result, opts.evaluation), 'utf8');
+  writeFileSync(files.humanDecision, renderHumanDecision(), 'utf8');
+
+  const packet: DreamSandboxPromotionPacket = {
+    status: 'dry-run-review-only',
+    packetRoot,
+    sourceSlug: opts.result.slug,
+    contentHash: opts.result.contentHash,
+    files,
+    sideEffects: {
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 0,
+    },
+  };
+  writeFileSync(files.manifest, JSON.stringify(packet, null, 2) + '\n', 'utf8');
+  return packet;
 }
 
 export function renderDreamSandboxEvaluationMarkdown(evaluation: DreamSandboxEvaluation): string {

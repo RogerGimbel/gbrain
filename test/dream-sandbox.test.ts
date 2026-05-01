@@ -11,6 +11,7 @@ import {
   runDreamSandbox,
   runDreamSandboxBatchDecision,
   runDreamSandboxCrossReferenceEvaluation,
+  runDreamSandboxPromotionPacket,
 } from '../src/core/dream-sandbox.ts';
 import { runDreamSandboxCommand } from '../src/commands/dream-sandbox.ts';
 
@@ -316,6 +317,86 @@ describe('dream synthesis sandbox', () => {
     expect(report).toContain('`knowledge/agents/gbrain`');
     expect(report).toContain('- Live GBrain DB writes: 0');
     expect(report).toContain('- Canonical Obsidian writes: 0');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('generates a dry-run promotion packet under a sandbox review root only', async () => {
+    const root = makeTmpDir();
+    const input = makeTranscript(root, '2026-04-30-gbrain-promotion-packet.txt');
+    const outputRoot = join(root, 'sandbox-output');
+    const packetRoot = join(root, 'promotion-review');
+    const result = runDreamSandbox({ input, outputRoot, dryRun: false });
+    const evaluation = await runDreamSandboxCrossReferenceEvaluation({
+      result,
+      queries: ['GBrain'],
+      limit: 1,
+      search: async query => ([{
+        query,
+        slug: 'projects/control/agent-stack-upgrade-plan-2026-04-30',
+        title: 'Agent Stack Upgrade Plan',
+        type: 'project-plan',
+        score: 0.99,
+      }]),
+    });
+
+    const packet = runDreamSandboxPromotionPacket({ result, evaluation, packetRoot });
+
+    expect(packet.status).toBe('dry-run-review-only');
+    expect(packet.sideEffects).toEqual({
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 0,
+    });
+    expect(packet.files.canonicalNoteDraft).toStartWith(packetRoot);
+    expect(packet.files.linksProposed).toStartWith(packetRoot);
+    expect(existsSync(packet.files.canonicalNoteDraft)).toBe(true);
+    expect(existsSync(packet.files.linksProposed)).toBe(true);
+    expect(existsSync(packet.files.humanDecision)).toBe(true);
+    const draft = readFileSync(packet.files.canonicalNoteDraft, 'utf8');
+    expect(draft).toContain('status: draft-promotion-review');
+    expect(draft).toContain('promotion_mode: dry-run');
+    expect(draft).toContain('Human review required');
+    expect(draft).toContain('projects/control/agent-stack-upgrade-plan-2026-04-30');
+    const links = JSON.parse(readFileSync(packet.files.linksProposed, 'utf8'));
+    expect(links[0].action).toBe('review-ambiguous');
+    expect(links[0].to_slug).toBe('projects/control/agent-stack-upgrade-plan-2026-04-30');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('promotion packet generator refuses canonical vault roots and CLI writes no canonical pages', async () => {
+    const root = makeTmpDir();
+    const input = makeTranscript(root, '2026-04-30-gbrain-promotion-cli.txt');
+    const outputRoot = join(root, 'sandbox-output');
+    const packetRoot = join(root, 'promotion-review');
+    const fakeEngine = {
+      searchKeyword: async () => [{
+        slug: 'knowledge/agents/gbrain',
+        title: 'GBrain',
+        type: 'agent-profile',
+        score: 0.9,
+      }],
+    } as any;
+
+    await runDreamSandboxCommand([
+      '--input', input,
+      '--output', outputRoot,
+      '--write-promotion-packet', packetRoot,
+      '--xref-query', 'GBrain',
+      '--json',
+    ], fakeEngine);
+
+    expect(existsSync(join(packetRoot, 'proposed', 'canonical-note-draft.md'))).toBe(true);
+    expect(readFileSync(join(packetRoot, 'review', 'human-decision.md'), 'utf8')).toContain('Decision: pending-human-review');
+
+    await expect(runDreamSandboxCommand([
+      '--input', input,
+      '--output', outputRoot,
+      '--write-promotion-packet', join(root, 'canonical-subdir'),
+      '--canonical-root', root,
+    ])).rejects.toThrow(/canonical Obsidian/i);
 
     rmSync(root, { recursive: true, force: true });
   });

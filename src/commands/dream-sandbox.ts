@@ -8,6 +8,7 @@ import {
   runDreamSandbox,
   runDreamSandboxBatchDecision,
   runDreamSandboxCrossReferenceEvaluation,
+  runDreamSandboxPromotionPacket,
 } from '../core/dream-sandbox.ts';
 import type { BrainEngine } from '../core/engine.ts';
 
@@ -20,6 +21,7 @@ interface ParsedDreamSandboxArgs {
   writeEval?: string;
   writeDecision?: string;
   writeXrefEval?: string;
+  writePromotionPacket?: string;
   xrefQueries: string[];
   xrefLimit: number;
 }
@@ -44,6 +46,8 @@ Options:
   --write-eval <file.md>      Write a sandbox-only evaluation report artifact
   --write-decision <file.md>  Write batch promote/park/discard decision report
   --write-xref-eval <file.md> Write read-only search/cross-reference evaluation report
+  --write-promotion-packet <dir>
+                              Write a dry-run human-review promotion packet under <dir>
   --xref-query <query>        Query existing brain read-only; repeatable with --write-xref-eval
   --xref-limit <n>            Search results per xref query (default: 3, max: 10)
   --canonical-root <dir>      Canonical vault root to refuse (default: Roger's Winston vault)
@@ -79,6 +83,9 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
         break;
       case '--write-xref-eval':
         parsed.writeXrefEval = args[++i];
+        break;
+      case '--write-promotion-packet':
+        parsed.writePromotionPacket = args[++i];
         break;
       case '--xref-query':
         parsed.xrefQueries.push(args[++i]);
@@ -139,6 +146,33 @@ export async function runDreamSandboxCommand(args: string[], engine?: Pick<Brain
     assertSafeDreamSandboxRoot(dirname(xrefEvaluationPath), parsed.canonicalRoot);
     mkdirSync(dirname(xrefEvaluationPath), { recursive: true });
     writeFileSync(xrefEvaluationPath, renderDreamSandboxEvaluationMarkdown(evaluation), 'utf8');
+  } else if (parsed.writePromotionPacket && parsed.xrefQueries.length > 0 && engine) {
+    evaluation = await runDreamSandboxCrossReferenceEvaluation({
+      result,
+      queries: parsed.xrefQueries,
+      limit: parsed.xrefLimit,
+      search: async (query, limit) => {
+        const results = await engine.searchKeyword(query, { limit });
+        return results.map(r => ({
+          query,
+          slug: r.slug,
+          title: r.title,
+          type: String(r.type),
+          score: r.score,
+        }));
+      },
+    });
+  }
+
+  let promotionPacket;
+  if (parsed.writePromotionPacket) {
+    assertSafeDreamSandboxRoot(parsed.writePromotionPacket, parsed.canonicalRoot);
+    promotionPacket = runDreamSandboxPromotionPacket({
+      result,
+      evaluation,
+      packetRoot: parsed.writePromotionPacket,
+      canonicalRoot: parsed.canonicalRoot,
+    });
   }
 
   let decisionReport;
@@ -172,6 +206,7 @@ export async function runDreamSandboxCommand(args: string[], engine?: Pick<Brain
       evaluation,
       evaluationPath,
       xrefEvaluationPath,
+      promotionPacket,
       decisionReport,
       decisionReportPath,
     }, null, 2));
@@ -183,6 +218,7 @@ export async function runDreamSandboxCommand(args: string[], engine?: Pick<Brain
     `Output: ${result.outputPath}`,
     evaluationPath ? `Evaluation: ${evaluationPath}` : undefined,
     xrefEvaluationPath ? `Read-only xref evaluation: ${xrefEvaluationPath}` : undefined,
+    promotionPacket ? `Promotion packet: ${promotionPacket.packetRoot}` : undefined,
     decisionReport ? `Decision: ${decisionReport.overallRecommendation}` : undefined,
     decisionReportPath ? `Decision report: ${decisionReportPath}` : undefined,
     `Transcript bytes: ${result.transcriptBytes}`,
