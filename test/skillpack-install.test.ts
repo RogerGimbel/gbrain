@@ -28,6 +28,7 @@ import {
   buildManagedBlock,
   diffSkill,
   extractManagedSlugs,
+  parseReceipt,
   planInstall,
   updateManagedBlock,
   InstallError,
@@ -384,6 +385,80 @@ describe('planInstall + applyInstall', () => {
     const resolver = readFileSync(join(skillsDir, 'RESOLVER.md'), 'utf-8');
     expect(resolver).toContain('`skills/alpha/SKILL.md`');
     expect(resolver).toContain('`skills/beta/SKILL.md`');
+  });
+
+  it('writes a cumulative receipt so later installs can distinguish gbrain rows from user rows', () => {
+    const { gbrainRoot } = scratchGbrain();
+    const { workspace, skillsDir } = scratchTarget();
+
+    const alphaOpts = {
+      gbrainRoot,
+      targetWorkspace: workspace,
+      targetSkillsDir: skillsDir,
+      skillSlug: 'alpha',
+    };
+    applyInstall(planInstall(alphaOpts), alphaOpts);
+
+    const betaOpts = {
+      gbrainRoot,
+      targetWorkspace: workspace,
+      targetSkillsDir: skillsDir,
+      skillSlug: 'beta',
+    };
+    applyInstall(planInstall(betaOpts), betaOpts);
+
+    const resolver = readFileSync(join(skillsDir, 'RESOLVER.md'), 'utf-8');
+    const receipt = parseReceipt(resolver);
+    expect(receipt).not.toBeNull();
+    expect(receipt!.cumulativeSlugs.sort()).toEqual(['alpha', 'beta']);
+    expect(receipt!.version).toBe(loadBundleManifest(gbrainRoot).version);
+  });
+
+  it('preserves unknown rows inside a receipted managed block and warns to investigate', () => {
+    const { gbrainRoot } = scratchGbrain();
+    const { workspace, skillsDir } = scratchTarget();
+
+    const alphaOpts = {
+      gbrainRoot,
+      targetWorkspace: workspace,
+      targetSkillsDir: skillsDir,
+      skillSlug: 'alpha',
+    };
+    applyInstall(planInstall(alphaOpts), alphaOpts);
+
+    const resolverPath = join(skillsDir, 'RESOLVER.md');
+    const withUserRow = readFileSync(resolverPath, 'utf-8').replace(
+      '<!-- gbrain:skillpack:end -->',
+      '| "gamma" | `skills/gamma/SKILL.md` |\n\n<!-- gbrain:skillpack:end -->',
+    );
+    writeFileSync(resolverPath, withUserRow);
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.join(' '));
+    try {
+      const betaOpts = {
+        gbrainRoot,
+        targetWorkspace: workspace,
+        targetSkillsDir: skillsDir,
+        skillSlug: 'beta',
+      };
+      applyInstall(planInstall(betaOpts), betaOpts);
+    } finally {
+      console.error = originalError;
+    }
+
+    const resolver = readFileSync(resolverPath, 'utf-8');
+    expect(resolver).toContain('`skills/alpha/SKILL.md`');
+    expect(resolver).toContain('`skills/beta/SKILL.md`');
+    expect(resolver).toContain('`skills/gamma/SKILL.md`');
+    expect(parseReceipt(resolver)!.cumulativeSlugs.sort()).toEqual([
+      'alpha',
+      'beta',
+      'gamma',
+    ]);
+    expect(errors.join('\n')).toContain('unknown row in managed block');
+    expect(errors.join('\n')).toContain('gamma');
   });
 
   it('works against AGENTS.md-at-workspace-root layout', () => {

@@ -55,7 +55,9 @@ false-positive counts. Lints fixtures for verbatim trigger copies.
 
 Options:
   --json             Machine-readable JSON envelope
-  --llm              (reserved for v0.18) Run Layer B LLM tie-break
+  --llm              Placeholder for Layer B LLM tie-break. Not yet
+                     implemented. Accepted for forward-compat; emits a
+                     stderr notice and runs the structural layer only.
   --skills-dir PATH  Override the auto-detected skills/ directory
   --help             Show this message
 
@@ -109,6 +111,15 @@ export async function runRoutingEvalCli(args: string[]): Promise<void> {
   if (flags.help) {
     console.log(HELP);
     process.exit(0);
+  }
+
+  // --llm is a placeholder in this release. Emit a stderr notice so
+  // users and CI logs can see the structural-only fallback clearly,
+  // regardless of --json mode. Does not affect exit code or stdout.
+  if (flags.llm) {
+    console.error(
+      '[routing-eval] --llm flag is a placeholder in this release. Running structural layer only; a future release will implement LLM tie-break.',
+    );
   }
 
   const { dir, error, message } = resolveSkillsDir(flags);
@@ -199,9 +210,6 @@ export async function runRoutingEvalCli(args: string[]): Promise<void> {
     }
     for (const m of loaded.malformed) {
       console.log(`  [malformed] ${m.file}:${m.line} — ${m.error}`);
-    }
-    if (flags.llm) {
-      console.log('\nNote: --llm (Layer B LLM tie-break) is reserved for v0.18. No model calls made.');
     }
   }
 

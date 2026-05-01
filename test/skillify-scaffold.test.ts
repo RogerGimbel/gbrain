@@ -210,6 +210,89 @@ describe('planScaffold', () => {
     expect(plan.resolverAppend).toBeNull();
   });
 
+  it('detects bare-path resolver row and does not append a duplicate', () => {
+    const { root, skillsDir } = scratchRepo();
+    const resolverPath = join(skillsDir, 'RESOLVER.md');
+    const before = readFileSync(resolverPath, 'utf-8');
+    writeFileSync(
+      resolverPath,
+      before +
+        '\n## Uncategorized\n\n| Trigger | Skill |\n|---------|-------|\n' +
+        '| "do thing" | skills/demo/SKILL.md |\n',
+    );
+
+    const plan = planScaffold({
+      skillsDir,
+      repoRoot: root,
+      vars: {
+        name: 'demo',
+        description: 'demo',
+        triggers: ['do thing'],
+        writesTo: [],
+        writesPages: false,
+        mutating: false,
+      },
+    });
+
+    expect(plan.resolverAppend).toBeNull();
+  });
+
+  it('detects quoted resolver rows and does not append duplicates', () => {
+    for (const quotedPath of ['"skills/demo/SKILL.md"', "'skills/demo/SKILL.md'"]) {
+      const { root, skillsDir } = scratchRepo();
+      const resolverPath = join(skillsDir, 'RESOLVER.md');
+      const before = readFileSync(resolverPath, 'utf-8');
+      writeFileSync(
+        resolverPath,
+        before +
+          '\n## Uncategorized\n\n| Trigger | Skill |\n|---------|-------|\n' +
+          `| "do thing" | ${quotedPath} |\n`,
+      );
+
+      const plan = planScaffold({
+        skillsDir,
+        repoRoot: root,
+        vars: {
+          name: 'demo',
+          description: 'demo',
+          triggers: ['do thing'],
+          writesTo: [],
+          writesPages: false,
+          mutating: false,
+        },
+      });
+
+      expect(plan.resolverAppend).toBeNull();
+    }
+  });
+
+  it('does not false-match shared-prefix skill paths', () => {
+    const { root, skillsDir } = scratchRepo();
+    const resolverPath = join(skillsDir, 'RESOLVER.md');
+    const before = readFileSync(resolverPath, 'utf-8');
+    writeFileSync(
+      resolverPath,
+      before +
+        '\n## Uncategorized\n\n| Trigger | Skill |\n|---------|-------|\n' +
+        '| "do extended thing" | skills/demo-extended/SKILL.md |\n',
+    );
+
+    const plan = planScaffold({
+      skillsDir,
+      repoRoot: root,
+      vars: {
+        name: 'demo',
+        description: 'demo',
+        triggers: ['do thing'],
+        writesTo: [],
+        writesPages: false,
+        mutating: false,
+      },
+    });
+
+    expect(plan.resolverAppend).not.toBeNull();
+  });
+
   it('handles --triggers omitted by seeding TBD placeholder', () => {
     const { root, skillsDir } = scratchRepo();
     const plan = planScaffold({

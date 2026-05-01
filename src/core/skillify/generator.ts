@@ -128,7 +128,14 @@ function detectExistingResolverRow(resolverFile: string, name: string): boolean 
     return false;
   }
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`\`skills\\/${escaped}\\/SKILL\\.md\``);
+  // Match the path with any common delimiter on either side: backtick,
+  // single quote, double quote, parenthesis, bracket, whitespace, start/end
+  // of line. The anchors avoid matching skills/demo-extended/SKILL.md when
+  // looking for skills/demo/SKILL.md.
+  const re = new RegExp(
+    `(?:^|[\`'"\\s\\(\\[])skills\\/${escaped}\\/SKILL\\.md(?:[\`'"\\s\\)\\]]|$)`,
+    'm',
+  );
   return re.test(content);
 }
 

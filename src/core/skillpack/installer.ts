@@ -232,15 +232,51 @@ function releaseLock(workspace: string): void {
 const MANAGED_BEGIN = '<!-- gbrain:skillpack:begin -->';
 const MANAGED_END = '<!-- gbrain:skillpack:end -->';
 
-export function buildManagedBlock(manifest: BundleManifest, slugs: string[]): string {
+// Receipt comment embedded inside the fence on every write. Lets the
+// next install distinguish "row gbrain installed previously" from
+// "row a user hand-added inside the fence." Format is intentionally
+// regex-friendly.
+const RECEIPT_RE =
+  /<!-- gbrain:skillpack:manifest cumulative-slugs="([^"]*)" version="([^"]*)" -->/;
+
+function buildReceipt(cumulativeSlugs: string[], version: string): string {
+  const sorted = [...cumulativeSlugs].sort();
+  return `<!-- gbrain:skillpack:manifest cumulative-slugs="${sorted.join(',')}" version="${version}" -->`;
+}
+
+/**
+ * Parse the receipt comment from a managed block. Returns null if no
+ * receipt is present (pre-receipt fences). An empty slug list returns
+ * an empty array.
+ */
+export function parseReceipt(
+  resolverContent: string,
+): { cumulativeSlugs: string[]; version: string } | null {
+  const beginIdx = resolverContent.indexOf(MANAGED_BEGIN);
+  const endIdx = resolverContent.indexOf(MANAGED_END);
+  if (beginIdx === -1 || endIdx === -1 || endIdx <= beginIdx) return null;
+  const block = resolverContent.slice(beginIdx, endIdx);
+  const m = RECEIPT_RE.exec(block);
+  if (!m) return null;
+  const slugs = m[1].length === 0 ? [] : m[1].split(',');
+  return { cumulativeSlugs: slugs, version: m[2] };
+}
+
+export function buildManagedBlock(
+  manifest: BundleManifest,
+  slugs: string[],
+  cumulativeSlugs?: string[],
+): string {
   const sorted = [...slugs].sort();
   const rows = sorted.map(
     slug => `| "${slug}" | \`skills/${slug}/SKILL.md\` |`,
   );
+  const receipt = buildReceipt(cumulativeSlugs ?? sorted, manifest.version);
   return [
     MANAGED_BEGIN,
     '',
     `<!-- Installed by gbrain ${manifest.version} — do not hand-edit between markers. -->`,
+    receipt,
     '',
     '| Trigger | Skill |',
     '|---------|-------|',
@@ -333,15 +369,23 @@ export function applyInstall(
       });
     }
 
-    // Managed block update
+    // Managed block update.
+    // installedSlugs = slugs we just wrote in THIS call.
+    // bundleSlugs    = the FULL bundle manifest's slug list; used by
+    //                  install-all to prune removed/renamed skills.
+    // isInstallAll   = caller passed --all (no specific skillSlug).
     const installedSlugs = opts.skillSlug
       ? [opts.skillSlug]
       : plan.manifest.skills.map(pathSlug);
+    const bundleSlugs = plan.manifest.skills.map(pathSlug);
+    const isInstallAll = !opts.skillSlug;
     const managedBlock = applyManagedBlock(
       plan.targetWorkspace,
       plan.targetSkillsDir,
       plan.manifest,
       installedSlugs,
+      bundleSlugs,
+      isInstallAll,
       opts.dryRun ?? false,
     );
 
@@ -365,6 +409,8 @@ function applyManagedBlock(
   skillsDir: string,
   manifest: BundleManifest,
   installedSlugs: string[],
+  bundleSlugs: string[],
+  isInstallAll: boolean,
   dryRun: boolean,
 ): ManagedBlockResult {
   // Prefer skills-dir resolver; fall back to workspace-root resolver.
@@ -377,11 +423,55 @@ function applyManagedBlock(
     };
   }
   const existing = readFileSync(resolver, 'utf-8');
-  // Merge with any slugs already present in the managed block so
-  // repeated single-skill installs accumulate rather than overwrite.
-  const priorSlugs = extractManagedSlugs(existing);
-  const merged = Array.from(new Set([...priorSlugs, ...installedSlugs]));
-  const newBlock = buildManagedBlock(manifest, merged);
+
+  // Step 1: figure out what gbrain previously installed into this fence.
+  // If a receipt exists, trust it as the cumulative install history. If
+  // not, fall back to rows currently inside the fence; pre-receipt fences
+  // were entirely gbrain-written, so this preserves upgrade behavior.
+  const receipt = parseReceipt(existing);
+  const priorCumulativeSlugs =
+    receipt !== null
+      ? new Set(receipt.cumulativeSlugs)
+      : new Set(extractManagedSlugs(existing));
+
+  // Step 2: compute the new cumulative set. Single-skill installs union
+  // with prior state; install-all prunes slugs no longer in the bundle.
+  const newCumulative = new Set(priorCumulativeSlugs);
+  for (const s of installedSlugs) newCumulative.add(s);
+  const prunedSlugs = new Set<string>();
+  if (isInstallAll) {
+    const bundleSet = new Set(bundleSlugs);
+    for (const s of [...newCumulative]) {
+      if (!bundleSet.has(s)) {
+        newCumulative.delete(s);
+        prunedSlugs.add(s);
+      }
+    }
+  }
+
+  // Step 3: after receipts exist, unknown rows inside the fence are no
+  // longer presumed to be gbrain-owned. Preserve them and warn once per
+  // slug so an operator can investigate instead of silently deleting data.
+  const existingRowSlugs = extractManagedSlugs(existing);
+  const bundleSet = new Set(bundleSlugs);
+  const unknownSlugs: string[] = [];
+  if (receipt !== null) {
+    for (const slug of existingRowSlugs) {
+      if (newCumulative.has(slug)) continue;
+      if (bundleSet.has(slug)) continue;
+      if (prunedSlugs.has(slug)) continue;
+      unknownSlugs.push(slug);
+      newCumulative.add(slug);
+    }
+  }
+  for (const slug of unknownSlugs) {
+    console.error(
+      `[skillpack] unknown row in managed block: "${slug}" at skills/${slug}/SKILL.md — not in gbrain's installed set. Investigate: user-added skill, hand-edited fence, or typo?`,
+    );
+  }
+
+  const cumulativeArr = [...newCumulative].sort();
+  const newBlock = buildManagedBlock(manifest, cumulativeArr, cumulativeArr);
   const updated = updateManagedBlock(existing, newBlock);
   if (updated === existing) {
     return { resolverFile: resolver, applied: false, skippedReason: 'no_change' };
