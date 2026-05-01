@@ -10,7 +10,9 @@ import {
   renderDreamSandboxEvaluationMarkdown,
   runDreamSandbox,
   runDreamSandboxBatchDecision,
+  runDreamSandboxCrossReferenceEvaluation,
 } from '../src/core/dream-sandbox.ts';
+import { runDreamSandboxCommand } from '../src/commands/dream-sandbox.ts';
 
 function makeTmpDir(prefix = 'gbrain-dream-sandbox-test-'): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -244,6 +246,76 @@ describe('dream synthesis sandbox', () => {
     expect(parsed.decisionReport.overallRecommendation).toBe('park');
     expect(existsSync(reportPath)).toBe(true);
     expect(readFileSync(reportPath, 'utf8')).toContain('Recommendation: `park`');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('read-only cross-reference evaluation can satisfy the existing-brain search gate without writes', async () => {
+    const root = makeTmpDir();
+    const input = makeTranscript(root, '2026-04-30-gbrain-cross-reference.txt');
+    const outputRoot = join(root, 'sandbox-output');
+    const result = runDreamSandbox({ input, outputRoot, dryRun: false });
+
+    const evaluation = await runDreamSandboxCrossReferenceEvaluation({
+      result,
+      queries: ['GBrain', 'Hermes'],
+      limit: 2,
+      search: async query => ([{
+        query,
+        slug: query === 'GBrain' ? 'knowledge/agents/gbrain' : 'knowledge/agents/hermes',
+        title: query,
+        type: 'agent-profile',
+        score: 1,
+      }]),
+    });
+
+    expect(evaluation.upstreamGoalChecks.find(c => c.id === 'cross-reference-existing-brain')?.status).toBe('pass');
+    expect(evaluation.crossReferences?.queries).toHaveLength(2);
+    expect(evaluation.crossReferences?.queries[0].results[0].slug).toBe('knowledge/agents/gbrain');
+    expect(evaluation.sideEffects).toEqual({
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 0,
+    });
+    expect(renderDreamSandboxEvaluationMarkdown(evaluation)).toContain('## Read-only cross-reference/search evidence');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('CLI writes read-only cross-reference evaluation report with an injected search engine', async () => {
+    const root = makeTmpDir();
+    const input = makeTranscript(root, '2026-04-30-gbrain-cross-reference-cli.txt');
+    const outputRoot = join(root, 'sandbox-output');
+    const reportPath = join(root, 'xref-report.md');
+    const searched: string[] = [];
+    const fakeEngine = {
+      searchKeyword: async (query: string, opts?: { limit?: number }) => {
+        searched.push(`${query}:${opts?.limit}`);
+        return [{
+          slug: query === 'GBrain' ? 'knowledge/agents/gbrain' : 'knowledge/agents/hermes',
+          title: query,
+          type: 'agent-profile',
+          score: 0.9,
+        }];
+      },
+    } as any;
+
+    await runDreamSandboxCommand([
+      '--input', input,
+      '--output', outputRoot,
+      '--write-xref-eval', reportPath,
+      '--xref-query', 'GBrain',
+      '--xref-query', 'Hermes',
+      '--xref-limit', '2',
+    ], fakeEngine);
+
+    expect(searched).toEqual(['GBrain:2', 'Hermes:2']);
+    const report = readFileSync(reportPath, 'utf8');
+    expect(report).toContain('## Read-only cross-reference/search evidence');
+    expect(report).toContain('`knowledge/agents/gbrain`');
+    expect(report).toContain('- Live GBrain DB writes: 0');
+    expect(report).toContain('- Canonical Obsidian writes: 0');
 
     rmSync(root, { recursive: true, force: true });
   });

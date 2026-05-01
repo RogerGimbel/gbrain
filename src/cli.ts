@@ -333,7 +333,16 @@ async function handleCliOnly(command: string, args: string[]) {
   }
   if (command === 'dream-sandbox') {
     const { runDreamSandboxCommand } = await import('./commands/dream-sandbox.ts');
-    await runDreamSandboxCommand(args);
+    if (args.includes('--write-xref-eval') || args.includes('--xref-query')) {
+      const engine = await connectEngine();
+      try {
+        await runDreamSandboxCommand(args, engine);
+      } finally {
+        await engine.disconnect();
+      }
+    } else {
+      await runDreamSandboxCommand(args);
+    }
     return;
   }
 

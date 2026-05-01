@@ -7,7 +7,9 @@ import {
   renderDreamSandboxEvaluationMarkdown,
   runDreamSandbox,
   runDreamSandboxBatchDecision,
+  runDreamSandboxCrossReferenceEvaluation,
 } from '../core/dream-sandbox.ts';
+import type { BrainEngine } from '../core/engine.ts';
 
 interface ParsedDreamSandboxArgs {
   inputs: string[];
@@ -17,6 +19,9 @@ interface ParsedDreamSandboxArgs {
   canonicalRoot?: string;
   writeEval?: string;
   writeDecision?: string;
+  writeXrefEval?: string;
+  xrefQueries: string[];
+  xrefLimit: number;
 }
 
 function printDreamSandboxHelp(): void {
@@ -38,12 +43,15 @@ Options:
   --json                      Emit machine-readable JSON
   --write-eval <file.md>      Write a sandbox-only evaluation report artifact
   --write-decision <file.md>  Write batch promote/park/discard decision report
+  --write-xref-eval <file.md> Write read-only search/cross-reference evaluation report
+  --xref-query <query>        Query existing brain read-only; repeatable with --write-xref-eval
+  --xref-limit <n>            Search results per xref query (default: 3, max: 10)
   --canonical-root <dir>      Canonical vault root to refuse (default: Roger's Winston vault)
 `);
 }
 
 function parseArgs(args: string[]): ParsedDreamSandboxArgs {
-  const parsed: ParsedDreamSandboxArgs = { inputs: [], dryRun: false, json: false };
+  const parsed: ParsedDreamSandboxArgs = { inputs: [], dryRun: false, json: false, xrefQueries: [], xrefLimit: 3 };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     switch (arg) {
@@ -69,6 +77,15 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
       case '--write-decision':
         parsed.writeDecision = args[++i];
         break;
+      case '--write-xref-eval':
+        parsed.writeXrefEval = args[++i];
+        break;
+      case '--xref-query':
+        parsed.xrefQueries.push(args[++i]);
+        break;
+      case '--xref-limit':
+        parsed.xrefLimit = Number(args[++i]);
+        break;
       case '--canonical-root':
         parsed.canonicalRoot = args[++i];
         break;
@@ -79,10 +96,12 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
   return parsed;
 }
 
-export async function runDreamSandboxCommand(args: string[]): Promise<void> {
+export async function runDreamSandboxCommand(args: string[], engine?: Pick<BrainEngine, 'searchKeyword'>): Promise<void> {
   const parsed = parseArgs(args);
   if (parsed.inputs.length === 0) throw new Error('Missing required --input <file>');
   if (!parsed.outputRoot) throw new Error('Missing required --output <dir>');
+  if (parsed.writeXrefEval && parsed.xrefQueries.length === 0) throw new Error('--write-xref-eval requires at least one --xref-query');
+  if ((parsed.writeXrefEval || parsed.xrefQueries.length > 0) && !engine) throw new Error('Read-only xref evaluation requires a connected search engine');
 
   const result = runDreamSandbox({
     input: parsed.inputs[0],
@@ -90,13 +109,36 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
     dryRun: parsed.dryRun,
     canonicalRoot: parsed.canonicalRoot,
   });
-  const evaluation = evaluateDreamSandbox(result);
+  let evaluation = evaluateDreamSandbox(result);
   let evaluationPath: string | undefined;
   if (parsed.writeEval) {
     evaluationPath = parsed.writeEval;
     assertSafeDreamSandboxRoot(dirname(evaluationPath), parsed.canonicalRoot);
     mkdirSync(dirname(evaluationPath), { recursive: true });
     writeFileSync(evaluationPath, renderDreamSandboxEvaluationMarkdown(evaluation), 'utf8');
+  }
+
+  let xrefEvaluationPath: string | undefined;
+  if (parsed.writeXrefEval && engine) {
+    evaluation = await runDreamSandboxCrossReferenceEvaluation({
+      result,
+      queries: parsed.xrefQueries,
+      limit: parsed.xrefLimit,
+      search: async (query, limit) => {
+        const results = await engine.searchKeyword(query, { limit });
+        return results.map(r => ({
+          query,
+          slug: r.slug,
+          title: r.title,
+          type: String(r.type),
+          score: r.score,
+        }));
+      },
+    });
+    xrefEvaluationPath = parsed.writeXrefEval;
+    assertSafeDreamSandboxRoot(dirname(xrefEvaluationPath), parsed.canonicalRoot);
+    mkdirSync(dirname(xrefEvaluationPath), { recursive: true });
+    writeFileSync(xrefEvaluationPath, renderDreamSandboxEvaluationMarkdown(evaluation), 'utf8');
   }
 
   let decisionReport;
@@ -129,6 +171,7 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
       sideEffects: result.sideEffects,
       evaluation,
       evaluationPath,
+      xrefEvaluationPath,
       decisionReport,
       decisionReportPath,
     }, null, 2));
@@ -139,6 +182,7 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
     `Dream sandbox ${result.written ? 'wrote' : 'planned'}: ${result.slug}`,
     `Output: ${result.outputPath}`,
     evaluationPath ? `Evaluation: ${evaluationPath}` : undefined,
+    xrefEvaluationPath ? `Read-only xref evaluation: ${xrefEvaluationPath}` : undefined,
     decisionReport ? `Decision: ${decisionReport.overallRecommendation}` : undefined,
     decisionReportPath ? `Decision report: ${decisionReportPath}` : undefined,
     `Transcript bytes: ${result.transcriptBytes}`,

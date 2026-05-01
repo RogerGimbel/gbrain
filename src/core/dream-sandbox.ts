@@ -41,6 +41,32 @@ export interface DreamSandboxGoalCheck {
   finding: string;
 }
 
+export interface DreamSandboxCrossReferenceHit {
+  query: string;
+  slug: string;
+  title: string;
+  type: string;
+  score: number;
+}
+
+export interface DreamSandboxCrossReferenceQueryEvidence {
+  query: string;
+  results: DreamSandboxCrossReferenceHit[];
+}
+
+export interface DreamSandboxCrossReferenceEvidence {
+  mode: 'read-only-keyword-search';
+  queries: DreamSandboxCrossReferenceQueryEvidence[];
+  sideEffects: DreamSandboxSideEffects;
+}
+
+export interface DreamSandboxCrossReferenceEvaluationOptions {
+  result: DreamSandboxResult;
+  queries: string[];
+  limit?: number;
+  search: (query: string, limit: number) => Promise<DreamSandboxCrossReferenceHit[]>;
+}
+
 export interface DreamSandboxEvaluation {
   overallStatus: 'sandbox-pass-needs-human-review' | 'sandbox-fail';
   slug: string;
@@ -49,6 +75,7 @@ export interface DreamSandboxEvaluation {
   contentHash: string;
   sideEffects: DreamSandboxSideEffects;
   upstreamGoalChecks: DreamSandboxGoalCheck[];
+  crossReferences?: DreamSandboxCrossReferenceEvidence;
   recommendations: string[];
 }
 
@@ -200,7 +227,19 @@ export function runDreamSandbox(opts: DreamSandboxOptions): DreamSandboxResult {
   return result;
 }
 
-export function evaluateDreamSandbox(result: DreamSandboxResult): DreamSandboxEvaluation {
+export function evaluateDreamSandbox(
+  result: DreamSandboxResult,
+  crossReferences?: DreamSandboxCrossReferenceEvidence,
+): DreamSandboxEvaluation {
+  const crossReferenceHits = crossReferences?.queries.reduce((sum, q) => sum + q.results.length, 0) ?? 0;
+  const crossReferenceStatus: DreamSandboxCheckStatus = crossReferences
+    ? (crossReferenceHits > 0 ? 'pass' : 'fail')
+    : 'deferred';
+  const crossReferenceFinding = crossReferences
+    ? (crossReferenceHits > 0
+      ? `Read-only keyword search found ${crossReferenceHits} candidate existing brain references across ${crossReferences.queries.length} queries; no writes were performed.`
+      : `Read-only keyword search ran ${crossReferences.queries.length} queries but found no existing brain references.`)
+    : 'Deferred intentionally: the sandbox evaluator does not connect to live GBrain or run search unless an explicit read-only searcher is supplied.';
   const checks: DreamSandboxGoalCheck[] = [
     {
       id: 'quote-user-verbatim',
@@ -213,8 +252,8 @@ export function evaluateDreamSandbox(result: DreamSandboxResult): DreamSandboxEv
     {
       id: 'cross-reference-existing-brain',
       upstreamGoal: 'Cross-reference existing brain content after searching before writes.',
-      status: 'deferred',
-      finding: 'Deferred intentionally: the sandbox evaluator does not connect to live GBrain or run search, so it cannot safely assert existing-page wikilinks yet.',
+      status: crossReferenceStatus,
+      finding: crossReferenceFinding,
     },
     {
       id: 'allowed-namespace',
@@ -250,13 +289,50 @@ export function evaluateDreamSandbox(result: DreamSandboxResult): DreamSandboxEv
     contentHash: result.contentHash,
     sideEffects: result.sideEffects,
     upstreamGoalChecks: checks,
+    crossReferences,
     recommendations: [
       'No live promotion is allowed from this report.',
       'Human-review the sandbox artifact before designing any canonical write path.',
-      'Keep the next Step 6 slice sandboxed; do not add Anthropic calls, minions, live DB writes, or canonical vault writes yet.',
-      'If the format is useful, next add fixture-based quality cases for real session patterns before any live integration.',
+      crossReferences
+        ? 'Use read-only cross-reference results as evidence only; do not create wikilinks or canonical pages automatically.'
+        : 'Keep the next Step 6 slice sandboxed; do not add Anthropic calls, minions, live DB writes, or canonical vault writes yet.',
+      crossReferences
+        ? 'If the references look useful, next design a dry-run promotion proposal rather than a live write path.'
+        : 'If the format is useful, next add fixture-based quality cases for real session patterns before any live integration.',
     ],
   };
+}
+
+export async function runDreamSandboxCrossReferenceEvaluation(
+  opts: DreamSandboxCrossReferenceEvaluationOptions,
+): Promise<DreamSandboxEvaluation> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 3, 10));
+  const uniqueQueries = Array.from(new Set(opts.queries.map(q => q.trim()).filter(Boolean)));
+  const queries: DreamSandboxCrossReferenceQueryEvidence[] = [];
+  for (const query of uniqueQueries) {
+    const results = await opts.search(query, limit);
+    queries.push({
+      query,
+      results: results.slice(0, limit).map(hit => ({
+        query,
+        slug: hit.slug,
+        title: hit.title,
+        type: hit.type,
+        score: hit.score,
+      })),
+    });
+  }
+  const crossReferences: DreamSandboxCrossReferenceEvidence = {
+    mode: 'read-only-keyword-search',
+    queries,
+    sideEffects: {
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 0,
+    },
+  };
+  return evaluateDreamSandbox(opts.result, crossReferences);
 }
 
 export function runDreamSandboxBatchDecision(opts: DreamSandboxBatchDecisionOptions): DreamSandboxBatchDecisionReport {
@@ -401,6 +477,28 @@ export function renderDreamSandboxEvaluationMarkdown(evaluation: DreamSandboxEva
     lines.push(`- Upstream goal: ${check.upstreamGoal}`);
     lines.push(`- Finding: ${check.finding}`);
     lines.push('');
+  }
+  if (evaluation.crossReferences) {
+    lines.push('## Read-only cross-reference/search evidence');
+    lines.push('');
+    lines.push(`- Mode: \`${evaluation.crossReferences.mode}\``);
+    lines.push(`- LLM calls: ${evaluation.crossReferences.sideEffects.llmCalls}`);
+    lines.push(`- Minion/subagent jobs: ${evaluation.crossReferences.sideEffects.minionJobs}`);
+    lines.push(`- Live GBrain DB writes: ${evaluation.crossReferences.sideEffects.liveDbWrites}`);
+    lines.push(`- Canonical Obsidian writes: ${evaluation.crossReferences.sideEffects.canonicalVaultWrites}`);
+    lines.push('');
+    for (const query of evaluation.crossReferences.queries) {
+      lines.push(`### Query: ${query.query}`);
+      lines.push('');
+      if (query.results.length === 0) {
+        lines.push('- No results.');
+      } else {
+        for (const hit of query.results) {
+          lines.push(`- \`${hit.slug}\` — ${hit.title} (${hit.type}, score ${hit.score})`);
+        }
+      }
+      lines.push('');
+    }
   }
   lines.push('## Recommendations');
   lines.push('');
