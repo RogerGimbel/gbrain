@@ -8,6 +8,7 @@ import {
   runDreamSandbox,
   runDreamSandboxBatchDecision,
   runDreamSandboxCrossReferenceEvaluation,
+  runDreamSandboxPromotionApplyDryRun,
   runDreamSandboxPromotionPacket,
 } from '../core/dream-sandbox.ts';
 import type { BrainEngine } from '../core/engine.ts';
@@ -22,6 +23,10 @@ interface ParsedDreamSandboxArgs {
   writeDecision?: string;
   writeXrefEval?: string;
   writePromotionPacket?: string;
+  applyPromotionDryRun: boolean;
+  promotionPacket?: string;
+  stagingVault?: string;
+  writeApplyReport?: string;
   xrefQueries: string[];
   xrefLimit: number;
 }
@@ -48,6 +53,10 @@ Options:
   --write-xref-eval <file.md> Write read-only search/cross-reference evaluation report
   --write-promotion-packet <dir>
                               Write a dry-run human-review promotion packet under <dir>
+  --apply-promotion-dry-run   Apply one reviewed packet into a throwaway staging vault only
+  --promotion-packet <dir>    Reviewed promotion packet root for --apply-promotion-dry-run
+  --staging-vault <dir>       Throwaway staging vault root for --apply-promotion-dry-run
+  --write-apply-report <dir>  Report root for --apply-promotion-dry-run
   --xref-query <query>        Query existing brain read-only; repeatable with --write-xref-eval
   --xref-limit <n>            Search results per xref query (default: 3, max: 10)
   --canonical-root <dir>      Canonical vault root to refuse (default: Roger's Winston vault)
@@ -55,7 +64,7 @@ Options:
 }
 
 function parseArgs(args: string[]): ParsedDreamSandboxArgs {
-  const parsed: ParsedDreamSandboxArgs = { inputs: [], dryRun: false, json: false, xrefQueries: [], xrefLimit: 3 };
+  const parsed: ParsedDreamSandboxArgs = { inputs: [], dryRun: false, json: false, applyPromotionDryRun: false, xrefQueries: [], xrefLimit: 3 };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     switch (arg) {
@@ -87,6 +96,18 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
       case '--write-promotion-packet':
         parsed.writePromotionPacket = args[++i];
         break;
+      case '--apply-promotion-dry-run':
+        parsed.applyPromotionDryRun = true;
+        break;
+      case '--promotion-packet':
+        parsed.promotionPacket = args[++i];
+        break;
+      case '--staging-vault':
+        parsed.stagingVault = args[++i];
+        break;
+      case '--write-apply-report':
+        parsed.writeApplyReport = args[++i];
+        break;
       case '--xref-query':
         parsed.xrefQueries.push(args[++i]);
         break;
@@ -105,6 +126,29 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
 
 export async function runDreamSandboxCommand(args: string[], engine?: Pick<BrainEngine, 'searchKeyword'>): Promise<void> {
   const parsed = parseArgs(args);
+  if (parsed.applyPromotionDryRun) {
+    if (!parsed.promotionPacket) throw new Error('--apply-promotion-dry-run requires --promotion-packet <dir>');
+    if (!parsed.stagingVault) throw new Error('--apply-promotion-dry-run requires --staging-vault <dir>');
+    if (!parsed.writeApplyReport) throw new Error('--apply-promotion-dry-run requires --write-apply-report <dir>');
+    const applyDryRun = runDreamSandboxPromotionApplyDryRun({
+      promotionPacketRoot: parsed.promotionPacket,
+      stagingVaultRoot: parsed.stagingVault,
+      reportRoot: parsed.writeApplyReport,
+      canonicalRoot: parsed.canonicalRoot,
+    });
+    if (parsed.json) {
+      console.log(JSON.stringify({ ok: true, applyDryRun }, null, 2));
+      return;
+    }
+    console.log([
+      `Dream sandbox promotion apply dry-run: ${applyDryRun.status}`,
+      `Staged file: ${applyDryRun.stagedFiles[0]}`,
+      `Report: ${applyDryRun.reportFiles.markdown}`,
+      'Side effects: llm=0 minions=0 live_db=0 canonical_vault=0 live_sync=0',
+    ].join('\n'));
+    return;
+  }
+
   if (parsed.inputs.length === 0) throw new Error('Missing required --input <file>');
   if (!parsed.outputRoot) throw new Error('Missing required --output <dir>');
   if (parsed.writeXrefEval && parsed.xrefQueries.length === 0) throw new Error('--write-xref-eval requires at least one --xref-query');

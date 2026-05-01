@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
-import { join } from 'path';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync } from 'fs';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
   assertSafeDreamSandboxRoot,
@@ -12,6 +12,7 @@ import {
   runDreamSandboxBatchDecision,
   runDreamSandboxCrossReferenceEvaluation,
   runDreamSandboxPromotionPacket,
+  runDreamSandboxPromotionApplyDryRun,
 } from '../src/core/dream-sandbox.ts';
 import { runDreamSandboxCommand } from '../src/commands/dream-sandbox.ts';
 
@@ -28,6 +29,37 @@ function makeTranscript(root: string, name = '2026-04-30-hermes-session.txt'): s
     'Hermes: Include source path, content hash, and promotion warnings.',
   ].join('\n'), 'utf8');
   return path;
+}
+
+async function makePromotionPacket(root: string, reviewed = true): Promise<string> {
+  const input = makeTranscript(root, '2026-04-30-gbrain-staging-apply.txt');
+  const outputRoot = join(root, 'sandbox-output');
+  const packetRoot = join(root, 'promotion-review');
+  const result = runDreamSandbox({ input, outputRoot, dryRun: false });
+  const evaluation = await runDreamSandboxCrossReferenceEvaluation({
+    result,
+    queries: ['GBrain'],
+    limit: 1,
+    search: async query => ([{
+      query,
+      slug: 'projects/control/agent-stack-upgrade-plan-2026-04-30',
+      title: 'Agent Stack Upgrade Plan',
+      type: 'project-plan',
+      score: 0.99,
+    }]),
+  });
+  const packet = runDreamSandboxPromotionPacket({ result, evaluation, packetRoot });
+  if (reviewed) {
+    writeFileSync(packet.files.humanDecision, [
+      '# Human decision',
+      '',
+      'Decision: promote-dry-run-only',
+      'Reviewer: Roger',
+      'Scope: staging-only',
+      '',
+    ].join('\n'), 'utf8');
+  }
+  return packetRoot;
 }
 
 describe('dream synthesis sandbox', () => {
@@ -397,6 +429,105 @@ describe('dream synthesis sandbox', () => {
       '--write-promotion-packet', join(root, 'canonical-subdir'),
       '--canonical-root', root,
     ])).rejects.toThrow(/canonical Obsidian/i);
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('staging-only apply dry-run requires reviewed packet and writes one proposed markdown page to staging vault', async () => {
+    const root = makeTmpDir();
+    const packetRoot = await makePromotionPacket(root, true);
+    const stagingVault = join(root, 'staging-vault');
+    const reportRoot = join(root, 'apply-report');
+
+    const apply = runDreamSandboxPromotionApplyDryRun({
+      promotionPacketRoot: packetRoot,
+      stagingVaultRoot: stagingVault,
+      reportRoot,
+    });
+
+    expect(apply.status).toBe('staging-dry-run-only');
+    expect(apply.sideEffects).toEqual({
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 0,
+      stagingVaultWrites: 1,
+      liveSyncRuns: 0,
+    });
+    expect(apply.stagedFiles).toHaveLength(1);
+    expect(apply.stagedFiles[0]).toStartWith(resolve(stagingVault));
+    expect(apply.stagedFiles[0]).toContain('/experiments/dream-promotions/');
+    expect(existsSync(apply.stagedFiles[0])).toBe(true);
+    expect(readFileSync(apply.stagedFiles[0], 'utf8')).toContain('staging-dry-run-only');
+    expect(existsSync(join(reportRoot, 'apply-dry-run-report.md'))).toBe(true);
+    expect(existsSync(join(reportRoot, 'apply-dry-run-report.json'))).toBe(true);
+    expect(existsSync(join(reportRoot, 'links-proposed.json'))).toBe(true);
+    expect(existsSync(join(reportRoot, 'input-packet-copy', 'manifest.json'))).toBe(true);
+    expect(readFileSync(join(reportRoot, 'apply-dry-run-report.md'), 'utf8')).toContain('No canonical Obsidian writes were performed.');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('staging-only apply dry-run refuses canonical staging vault roots and pending decisions', async () => {
+    const root = makeTmpDir();
+    const reviewedPacket = await makePromotionPacket(root, true);
+    const pendingRoot = makeTmpDir('gbrain-dream-sandbox-pending-test-');
+    const pendingPacket = await makePromotionPacket(pendingRoot, false);
+
+    expect(() => runDreamSandboxPromotionApplyDryRun({
+      promotionPacketRoot: reviewedPacket,
+      stagingVaultRoot: root,
+      reportRoot: join(root, 'report'),
+      canonicalRoot: root,
+    })).toThrow(/canonical Obsidian/i);
+
+    expect(() => runDreamSandboxPromotionApplyDryRun({
+      promotionPacketRoot: reviewedPacket,
+      stagingVaultRoot: join(root, 'nested-staging'),
+      reportRoot: join(root, 'report'),
+      canonicalRoot: root,
+    })).toThrow(/canonical Obsidian/i);
+
+    expect(() => runDreamSandboxPromotionApplyDryRun({
+      promotionPacketRoot: pendingPacket,
+      stagingVaultRoot: join(pendingRoot, 'staging-vault'),
+      reportRoot: join(pendingRoot, 'report'),
+    })).toThrow(/promote-dry-run-only/i);
+
+    rmSync(root, { recursive: true, force: true });
+    rmSync(pendingRoot, { recursive: true, force: true });
+  });
+
+  test('CLI returns staging-only apply dry-run JSON and does not need a live engine', async () => {
+    const root = makeTmpDir();
+    const packetRoot = await makePromotionPacket(root, true);
+    const copiedPacket = join(root, 'copied-promotion-review');
+    cpSync(packetRoot, copiedPacket, { recursive: true });
+    const stagingVault = join(root, 'staging-vault');
+    const reportRoot = join(root, 'apply-report');
+
+    const proc = Bun.spawn([
+      'bun', 'run', 'src/cli.ts', 'dream-sandbox',
+      '--apply-promotion-dry-run',
+      '--promotion-packet', copiedPacket,
+      '--staging-vault', stagingVault,
+      '--write-apply-report', reportRoot,
+      '--json',
+    ], {
+      cwd: new URL('..', import.meta.url).pathname,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(0);
+    expect(stderr).toBe('');
+    const parsed = JSON.parse(stdout);
+    expect(parsed.applyDryRun.status).toBe('staging-dry-run-only');
+    expect(parsed.applyDryRun.sideEffects.liveDbWrites).toBe(0);
+    expect(parsed.applyDryRun.sideEffects.canonicalVaultWrites).toBe(0);
+    expect(parsed.applyDryRun.stagedFiles).toHaveLength(1);
+    expect(existsSync(parsed.applyDryRun.stagedFiles[0])).toBe(true);
 
     rmSync(root, { recursive: true, force: true });
   });
