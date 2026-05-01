@@ -72,7 +72,9 @@ async function makeCanonicalPromotionPacket(root: string, targetPage: string): P
     'Reviewer: Hermes',
     'Scope: canonical-main-lane',
     `Target page: ${targetPage}`,
-    'Canonical summary: Promote the reviewed dream-promotion lane into the guarded main workflow; do not promote the sample as a standalone page.',
+    'Canonical summary:',
+    'Promote the reviewed dream-promotion lane into the guarded main workflow.',
+    'Do not promote the sample as a standalone page.',
     '',
   ].join('\n'), 'utf8');
   return packetRoot;
@@ -580,11 +582,12 @@ describe('dream synthesis sandbox', () => {
     const target = readFileSync(targetPath, 'utf8');
     expect(target).toContain('## Dream sandbox reviewed promotion');
     expect(target).toContain('Decision: `promote-canonical`');
-    expect(target).toContain('Promote the reviewed dream-promotion lane into the guarded main workflow');
+    expect(target).toContain('Promote the reviewed dream-promotion lane into the guarded main workflow.\nDo not promote the sample as a standalone page.');
     expect(target).not.toContain('Candidate existing pages checked before new-page creation');
     expect(existsSync(join(reportRoot, 'canonical-promotion-report.md'))).toBe(true);
     expect(existsSync(join(reportRoot, 'canonical-promotion-report.json'))).toBe(true);
-    expect(existsSync(join(reportRoot, 'canonical-promotion-diff.md'))).toBe(true);
+    expect(existsSync(join(reportRoot, 'canonical-promotion-append.diff'))).toBe(true);
+    expect(existsSync(join(reportRoot, 'canonical-promotion-diff.md'))).toBe(false);
     expect(existsSync(join(reportRoot, 'links-proposed.json'))).toBe(true);
     expect(readFileSync(join(reportRoot, 'canonical-promotion-report.md'), 'utf8')).toContain('Proposed links were not written automatically.');
 
@@ -662,6 +665,8 @@ describe('dream synthesis sandbox', () => {
     expect(parsed.canonicalPromotion.status).toBe('canonical-main-lane-promoted');
     expect(parsed.canonicalPromotion.sideEffects.liveDbWrites).toBe(0);
     expect(parsed.canonicalPromotion.sideEffects.proposedLinkWrites).toBe(0);
+    expect(parsed.canonicalPromotion.canonicalSummary).toContain('Do not promote the sample as a standalone page.');
+    expect(existsSync(join(reportRoot, 'canonical-promotion-append.diff'))).toBe(true);
     expect(readFileSync(targetPath, 'utf8')).toContain('Dream sandbox reviewed promotion');
 
     rmSync(root, { recursive: true, force: true });

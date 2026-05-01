@@ -911,14 +911,29 @@ interface CanonicalPromotionDecision {
   targetPage: string;
 }
 
+function parseCanonicalSummary(decision: string): string {
+  const lines = decision.split(/\r?\n/);
+  const index = lines.findIndex(line => /^Canonical summary:/i.test(line));
+  if (index < 0) return '';
+
+  const inline = lines[index].replace(/^Canonical summary:\s*/i, '').trim();
+  if (inline) return inline;
+
+  const collected: string[] = [];
+  for (const line of lines.slice(index + 1)) {
+    if (/^[A-Za-z][A-Za-z -]+:\s*/.test(line) && collected.some(existing => existing.trim())) break;
+    collected.push(line);
+  }
+  return collected.join('\n').trim();
+}
+
 function parseCanonicalPromotionDecision(humanDecisionPath: string, targetPage: string): CanonicalPromotionDecision {
   const decision = readFileSync(humanDecisionPath, 'utf8');
   const hasDecision = /^Decision:\s*promote-canonical\s*$/mi.test(decision);
   const hasReviewer = /^Reviewer:\s*Hermes\s*$/mi.test(decision);
   const hasScope = /^Scope:\s*canonical-main-lane\s*$/mi.test(decision);
   const targetMatch = decision.match(/^Target page:\s*(.+?)\s*$/mi);
-  const summaryMatch = decision.match(/^Canonical summary:\s*(.+?)\s*$/mi);
-  const summary = summaryMatch?.[1]?.trim() ?? '';
+  const summary = parseCanonicalSummary(decision);
   const decisionTargetPage = targetMatch?.[1]?.trim() ?? '';
   if (!hasDecision || !hasReviewer || !hasScope) {
     throw new Error('Canonical promotion requires human-decision.md with Decision: promote-canonical, Reviewer: Hermes, and Scope: canonical-main-lane');
@@ -926,7 +941,7 @@ function parseCanonicalPromotionDecision(humanDecisionPath: string, targetPage: 
   if (decisionTargetPage !== targetPage) {
     throw new Error(`Canonical promotion target page mismatch: decision=${decisionTargetPage || '<missing>'} cli=${targetPage}`);
   }
-  if (!summary) throw new Error('Canonical promotion requires a non-empty Canonical summary line in human-decision.md');
+  if (!summary) throw new Error('Canonical promotion requires a non-empty Canonical summary in human-decision.md');
   return { summary, targetPage: decisionTargetPage };
 }
 
@@ -1050,7 +1065,7 @@ export function runDreamSandboxPromotionCanonicalPromote(
   const reportFiles = {
     markdown: join(reportRoot, 'canonical-promotion-report.md'),
     json: join(reportRoot, 'canonical-promotion-report.json'),
-    diff: join(reportRoot, 'canonical-promotion-diff.md'),
+    diff: join(reportRoot, 'canonical-promotion-append.diff'),
     linksProposed: join(reportRoot, 'links-proposed.json'),
   };
 
