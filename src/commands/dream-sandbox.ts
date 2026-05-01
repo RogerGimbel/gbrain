@@ -9,6 +9,7 @@ import {
   runDreamSandboxBatchDecision,
   runDreamSandboxCrossReferenceEvaluation,
   runDreamSandboxPromotionApplyDryRun,
+  runDreamSandboxPromotionCanonicalPromote,
   runDreamSandboxPromotionPacket,
 } from '../core/dream-sandbox.ts';
 import type { BrainEngine } from '../core/engine.ts';
@@ -24,9 +25,12 @@ interface ParsedDreamSandboxArgs {
   writeXrefEval?: string;
   writePromotionPacket?: string;
   applyPromotionDryRun: boolean;
+  promoteReviewedPacket: boolean;
   promotionPacket?: string;
   stagingVault?: string;
+  targetPage?: string;
   writeApplyReport?: string;
+  writePromotionReport?: string;
   xrefQueries: string[];
   xrefLimit: number;
 }
@@ -54,9 +58,13 @@ Options:
   --write-promotion-packet <dir>
                               Write a dry-run human-review promotion packet under <dir>
   --apply-promotion-dry-run   Apply one reviewed packet into a throwaway staging vault only
-  --promotion-packet <dir>    Reviewed promotion packet root for --apply-promotion-dry-run
+  --promotion-packet <dir>    Reviewed promotion packet root for apply/promote commands
   --staging-vault <dir>       Throwaway staging vault root for --apply-promotion-dry-run
   --write-apply-report <dir>  Report root for --apply-promotion-dry-run
+  --promote-reviewed-packet   Append a reviewed packet summary to an existing canonical target page
+  --target-page <slug>        Existing canonical page slug for --promote-reviewed-packet
+  --write-promotion-report <dir>
+                              Report root for --promote-reviewed-packet
   --xref-query <query>        Query existing brain read-only; repeatable with --write-xref-eval
   --xref-limit <n>            Search results per xref query (default: 3, max: 10)
   --canonical-root <dir>      Canonical vault root to refuse (default: Roger's Winston vault)
@@ -64,7 +72,7 @@ Options:
 }
 
 function parseArgs(args: string[]): ParsedDreamSandboxArgs {
-  const parsed: ParsedDreamSandboxArgs = { inputs: [], dryRun: false, json: false, applyPromotionDryRun: false, xrefQueries: [], xrefLimit: 3 };
+  const parsed: ParsedDreamSandboxArgs = { inputs: [], dryRun: false, json: false, applyPromotionDryRun: false, promoteReviewedPacket: false, xrefQueries: [], xrefLimit: 3 };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     switch (arg) {
@@ -99,14 +107,23 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
       case '--apply-promotion-dry-run':
         parsed.applyPromotionDryRun = true;
         break;
+      case '--promote-reviewed-packet':
+        parsed.promoteReviewedPacket = true;
+        break;
       case '--promotion-packet':
         parsed.promotionPacket = args[++i];
         break;
       case '--staging-vault':
         parsed.stagingVault = args[++i];
         break;
+      case '--target-page':
+        parsed.targetPage = args[++i];
+        break;
       case '--write-apply-report':
         parsed.writeApplyReport = args[++i];
+        break;
+      case '--write-promotion-report':
+        parsed.writePromotionReport = args[++i];
         break;
       case '--xref-query':
         parsed.xrefQueries.push(args[++i]);
@@ -126,6 +143,30 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
 
 export async function runDreamSandboxCommand(args: string[], engine?: Pick<BrainEngine, 'searchKeyword'>): Promise<void> {
   const parsed = parseArgs(args);
+  if (parsed.promoteReviewedPacket) {
+    if (!parsed.promotionPacket) throw new Error('--promote-reviewed-packet requires --promotion-packet <dir>');
+    if (!parsed.canonicalRoot) throw new Error('--promote-reviewed-packet requires --canonical-root <dir>');
+    if (!parsed.targetPage) throw new Error('--promote-reviewed-packet requires --target-page <slug>');
+    if (!parsed.writePromotionReport) throw new Error('--promote-reviewed-packet requires --write-promotion-report <dir>');
+    const canonicalPromotion = runDreamSandboxPromotionCanonicalPromote({
+      promotionPacketRoot: parsed.promotionPacket,
+      canonicalRoot: parsed.canonicalRoot,
+      targetPage: parsed.targetPage,
+      reportRoot: parsed.writePromotionReport,
+    });
+    if (parsed.json) {
+      console.log(JSON.stringify({ ok: true, canonicalPromotion }, null, 2));
+      return;
+    }
+    console.log([
+      `Dream sandbox canonical promotion: ${canonicalPromotion.status}`,
+      `Target page: ${canonicalPromotion.targetPage}`,
+      `Target path: ${canonicalPromotion.targetPath}`,
+      `Report: ${canonicalPromotion.reportFiles.markdown}`,
+      'Side effects: llm=0 minions=0 live_db=0 canonical_vault=1 proposed_links=0 live_sync=0',
+    ].join('\n'));
+    return;
+  }
   if (parsed.applyPromotionDryRun) {
     if (!parsed.promotionPacket) throw new Error('--apply-promotion-dry-run requires --promotion-packet <dir>');
     if (!parsed.stagingVault) throw new Error('--apply-promotion-dry-run requires --staging-vault <dir>');

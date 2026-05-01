@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync } from 'fs';
-import { join, resolve } from 'path';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync, mkdirSync } from 'fs';
+import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import {
   assertSafeDreamSandboxRoot,
@@ -13,6 +13,7 @@ import {
   runDreamSandboxCrossReferenceEvaluation,
   runDreamSandboxPromotionPacket,
   runDreamSandboxPromotionApplyDryRun,
+  runDreamSandboxPromotionCanonicalPromote,
 } from '../src/core/dream-sandbox.ts';
 import { runDreamSandboxCommand } from '../src/commands/dream-sandbox.ts';
 
@@ -59,6 +60,21 @@ async function makePromotionPacket(root: string, reviewed = true): Promise<strin
       '',
     ].join('\n'), 'utf8');
   }
+  return packetRoot;
+}
+
+async function makeCanonicalPromotionPacket(root: string, targetPage: string): Promise<string> {
+  const packetRoot = await makePromotionPacket(root, false);
+  writeFileSync(join(packetRoot, 'review', 'human-decision.md'), [
+    '# Human decision',
+    '',
+    'Decision: promote-canonical',
+    'Reviewer: Hermes',
+    'Scope: canonical-main-lane',
+    `Target page: ${targetPage}`,
+    'Canonical summary: Promote the reviewed dream-promotion lane into the guarded main workflow; do not promote the sample as a standalone page.',
+    '',
+  ].join('\n'), 'utf8');
   return packetRoot;
 }
 
@@ -528,6 +544,125 @@ describe('dream synthesis sandbox', () => {
     expect(parsed.applyDryRun.sideEffects.canonicalVaultWrites).toBe(0);
     expect(parsed.applyDryRun.stagedFiles).toHaveLength(1);
     expect(existsSync(parsed.applyDryRun.stagedFiles[0])).toBe(true);
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('canonical promotion requires reviewed packet and appends one curated block to an existing target page', async () => {
+    const root = makeTmpDir();
+    const canonicalRoot = join(root, 'canonical-vault');
+    const targetPage = 'projects/control/agent-stack-upgrade-plan-2026-04-30';
+    const targetPath = join(canonicalRoot, `${targetPage}.md`);
+    const reportRoot = join(root, 'canonical-promotion-report');
+    const packetRoot = await makeCanonicalPromotionPacket(root, targetPage);
+    mkdirSync(dirname(targetPath), { recursive: true });
+    writeFileSync(targetPath, '# Agent Stack Upgrade Plan\n\nExisting plan body.\n', 'utf8');
+
+    const promotion = runDreamSandboxPromotionCanonicalPromote({
+      promotionPacketRoot: packetRoot,
+      canonicalRoot,
+      targetPage,
+      reportRoot,
+    });
+
+    expect(promotion.status).toBe('canonical-main-lane-promoted');
+    expect(promotion.targetPage).toBe(targetPage);
+    expect(promotion.targetPath).toBe(resolve(targetPath));
+    expect(promotion.sideEffects).toEqual({
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 1,
+      proposedLinkWrites: 0,
+      liveSyncRuns: 0,
+      reportWrites: 4,
+    });
+    const target = readFileSync(targetPath, 'utf8');
+    expect(target).toContain('## Dream sandbox reviewed promotion');
+    expect(target).toContain('Decision: `promote-canonical`');
+    expect(target).toContain('Promote the reviewed dream-promotion lane into the guarded main workflow');
+    expect(target).not.toContain('Candidate existing pages checked before new-page creation');
+    expect(existsSync(join(reportRoot, 'canonical-promotion-report.md'))).toBe(true);
+    expect(existsSync(join(reportRoot, 'canonical-promotion-report.json'))).toBe(true);
+    expect(existsSync(join(reportRoot, 'canonical-promotion-diff.md'))).toBe(true);
+    expect(existsSync(join(reportRoot, 'links-proposed.json'))).toBe(true);
+    expect(readFileSync(join(reportRoot, 'canonical-promotion-report.md'), 'utf8')).toContain('Proposed links were not written automatically.');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('canonical promotion refuses staging decisions, missing target pages, new-page creation, and target traversal', async () => {
+    const root = makeTmpDir();
+    const stagingRoot = makeTmpDir('gbrain-dream-sandbox-staging-decision-test-');
+    const canonicalRoot = join(root, 'canonical-vault');
+    const targetPage = 'projects/control/agent-stack-upgrade-plan-2026-04-30';
+    const targetPath = join(canonicalRoot, `${targetPage}.md`);
+    mkdirSync(dirname(targetPath), { recursive: true });
+    writeFileSync(targetPath, '# Agent Stack Upgrade Plan\n', 'utf8');
+    const stagingPacket = await makePromotionPacket(stagingRoot, true);
+    const canonicalPacket = await makeCanonicalPromotionPacket(root, targetPage);
+    const missingRoot = makeTmpDir('gbrain-dream-sandbox-missing-target-test-');
+    const missingTargetPage = 'projects/control/new-page-is-not-allowed';
+    const missingTargetPacket = await makeCanonicalPromotionPacket(missingRoot, missingTargetPage);
+
+    expect(() => runDreamSandboxPromotionCanonicalPromote({
+      promotionPacketRoot: stagingPacket,
+      canonicalRoot,
+      targetPage,
+      reportRoot: join(root, 'report-staging'),
+    })).toThrow(/promote-canonical/i);
+
+    expect(() => runDreamSandboxPromotionCanonicalPromote({
+      promotionPacketRoot: missingTargetPacket,
+      canonicalRoot,
+      targetPage: missingTargetPage,
+      reportRoot: join(root, 'report-missing'),
+    })).toThrow(/existing target page/i);
+
+    expect(() => runDreamSandboxPromotionCanonicalPromote({
+      promotionPacketRoot: canonicalPacket,
+      canonicalRoot,
+      targetPage: '../outside',
+      reportRoot: join(root, 'report-traversal'),
+    })).toThrow(/relative vault slug/i);
+
+    rmSync(root, { recursive: true, force: true });
+    rmSync(stagingRoot, { recursive: true, force: true });
+    rmSync(missingRoot, { recursive: true, force: true });
+  });
+
+  test('CLI promotes a reviewed packet to an existing target page and emits JSON without a live engine', async () => {
+    const root = makeTmpDir();
+    const canonicalRoot = join(root, 'canonical-vault');
+    const targetPage = 'projects/control/agent-stack-upgrade-plan-2026-04-30';
+    const targetPath = join(canonicalRoot, `${targetPage}.md`);
+    const packetRoot = await makeCanonicalPromotionPacket(root, targetPage);
+    const reportRoot = join(root, 'canonical-promotion-report');
+    mkdirSync(dirname(targetPath), { recursive: true });
+    writeFileSync(targetPath, '# Agent Stack Upgrade Plan\n\nExisting plan body.\n', 'utf8');
+
+    const proc = Bun.spawn([
+      'bun', 'run', 'src/cli.ts', 'dream-sandbox',
+      '--promote-reviewed-packet',
+      '--promotion-packet', packetRoot,
+      '--canonical-root', canonicalRoot,
+      '--target-page', targetPage,
+      '--write-promotion-report', reportRoot,
+      '--json',
+    ], {
+      cwd: new URL('..', import.meta.url).pathname,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(0);
+    expect(stderr).toBe('');
+    const parsed = JSON.parse(stdout);
+    expect(parsed.canonicalPromotion.status).toBe('canonical-main-lane-promoted');
+    expect(parsed.canonicalPromotion.sideEffects.liveDbWrites).toBe(0);
+    expect(parsed.canonicalPromotion.sideEffects.proposedLinkWrites).toBe(0);
+    expect(readFileSync(targetPath, 'utf8')).toContain('Dream sandbox reviewed promotion');
 
     rmSync(root, { recursive: true, force: true });
   });

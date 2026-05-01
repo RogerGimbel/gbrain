@@ -166,6 +166,44 @@ export interface DreamSandboxPromotionApplyDryRunResult {
   sideEffects: DreamSandboxPromotionApplyDryRunSideEffects;
 }
 
+export interface DreamSandboxPromotionCanonicalOptions {
+  promotionPacketRoot: string;
+  canonicalRoot: string;
+  targetPage: string;
+  reportRoot: string;
+}
+
+export interface DreamSandboxPromotionCanonicalSideEffects {
+  llmCalls: 0;
+  minionJobs: 0;
+  liveDbWrites: 0;
+  canonicalVaultWrites: 1;
+  proposedLinkWrites: 0;
+  liveSyncRuns: 0;
+  reportWrites: number;
+}
+
+export interface DreamSandboxPromotionCanonicalResult {
+  status: 'canonical-main-lane-promoted';
+  promotionPacketRoot: string;
+  canonicalRoot: string;
+  reportRoot: string;
+  sourceSlug: string;
+  contentHash: string;
+  targetPage: string;
+  targetPath: string;
+  targetBeforeHash: string;
+  targetAfterHash: string;
+  canonicalSummary: string;
+  reportFiles: {
+    markdown: string;
+    json: string;
+    diff: string;
+    linksProposed: string;
+  };
+  sideEffects: DreamSandboxPromotionCanonicalSideEffects;
+}
+
 export function assertSafeDreamSandboxRoot(
   outputRoot: string,
   canonicalRoot = DEFAULT_CANONICAL_OBSIDIAN_ROOT,
@@ -864,6 +902,187 @@ export function runDreamSandboxPromotionApplyDryRun(
   };
 
   writeFileSync(result.reportFiles.markdown, renderApplyDryRunMarkdown(result), 'utf8');
+  writeFileSync(result.reportFiles.json, JSON.stringify(result, null, 2) + '\n', 'utf8');
+  return result;
+}
+
+interface CanonicalPromotionDecision {
+  summary: string;
+  targetPage: string;
+}
+
+function parseCanonicalPromotionDecision(humanDecisionPath: string, targetPage: string): CanonicalPromotionDecision {
+  const decision = readFileSync(humanDecisionPath, 'utf8');
+  const hasDecision = /^Decision:\s*promote-canonical\s*$/mi.test(decision);
+  const hasReviewer = /^Reviewer:\s*Hermes\s*$/mi.test(decision);
+  const hasScope = /^Scope:\s*canonical-main-lane\s*$/mi.test(decision);
+  const targetMatch = decision.match(/^Target page:\s*(.+?)\s*$/mi);
+  const summaryMatch = decision.match(/^Canonical summary:\s*(.+?)\s*$/mi);
+  const summary = summaryMatch?.[1]?.trim() ?? '';
+  const decisionTargetPage = targetMatch?.[1]?.trim() ?? '';
+  if (!hasDecision || !hasReviewer || !hasScope) {
+    throw new Error('Canonical promotion requires human-decision.md with Decision: promote-canonical, Reviewer: Hermes, and Scope: canonical-main-lane');
+  }
+  if (decisionTargetPage !== targetPage) {
+    throw new Error(`Canonical promotion target page mismatch: decision=${decisionTargetPage || '<missing>'} cli=${targetPage}`);
+  }
+  if (!summary) throw new Error('Canonical promotion requires a non-empty Canonical summary line in human-decision.md');
+  return { summary, targetPage: decisionTargetPage };
+}
+
+function normalizeTargetPageSlug(targetPage: string): string {
+  const normalized = targetPage.replace(/\.md$/, '').replace(/^\/+|\/+$/g, '');
+  const parts = normalized.split('/');
+  if (!normalized || targetPage.startsWith('/') || targetPage.includes('\\') || parts.some(part => part === '..' || part === '.' || part === '')) {
+    throw new Error('--target-page must be a relative vault slug without traversal');
+  }
+  return normalized;
+}
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function renderCanonicalPromotionBlock(packet: DreamSandboxPromotionPacket, decision: CanonicalPromotionDecision): string {
+  return [
+    '## Dream sandbox reviewed promotion',
+    '',
+    `- Decision: \`promote-canonical\``,
+    `- Reviewer: \`Hermes\``,
+    `- Scope: \`canonical-main-lane\``,
+    `- Source sandbox slug: \`${packet.sourceSlug}\``,
+    `- Source content hash: \`${packet.contentHash}\``,
+    `- Target page: \`${decision.targetPage}\``,
+    '- Proposed links: report artifact only; no graph links were written automatically.',
+    '- Live sync/import/embed: not run by this command.',
+    '',
+    '### Curated promotion summary',
+    '',
+    decision.summary,
+  ].join('\n');
+}
+
+function renderCanonicalPromotionDiff(targetPath: string, appendBlock: string): string {
+  return [
+    `--- ${targetPath}`,
+    `+++ ${targetPath}`,
+    '@@ append reviewed dream promotion @@',
+    ...appendBlock.split('\n').map(line => `+${line}`),
+    '',
+  ].join('\n');
+}
+
+function renderCanonicalPromotionReport(result: DreamSandboxPromotionCanonicalResult): string {
+  return [
+    '# Dream Sandbox Canonical Promotion Report',
+    '',
+    `- Status: \`${result.status}\``,
+    `- Promotion packet: \`${result.promotionPacketRoot}\``,
+    `- Target page: \`${result.targetPage}\``,
+    `- Target path: \`${result.targetPath}\``,
+    `- Source slug: \`${result.sourceSlug}\``,
+    `- Content hash: \`${result.contentHash}\``,
+    `- Target before hash: \`${result.targetBeforeHash}\``,
+    `- Target after hash: \`${result.targetAfterHash}\``,
+    '',
+    '## Side effects',
+    '',
+    `- LLM calls: ${result.sideEffects.llmCalls}`,
+    `- Minion/subagent jobs: ${result.sideEffects.minionJobs}`,
+    `- Live GBrain DB writes: ${result.sideEffects.liveDbWrites}`,
+    `- Canonical Obsidian writes: ${result.sideEffects.canonicalVaultWrites}`,
+    `- Proposed link writes: ${result.sideEffects.proposedLinkWrites}`,
+    `- Live sync/import runs: ${result.sideEffects.liveSyncRuns}`,
+    `- Report writes: ${result.sideEffects.reportWrites}`,
+    '',
+    'Proposed links were not written automatically.',
+    'No live GBrain DB writes were performed.',
+    'No live sync/import/embed runs were performed.',
+    '',
+    '## Report artifacts',
+    '',
+    `- JSON: \`${result.reportFiles.json}\``,
+    `- Append diff: \`${result.reportFiles.diff}\``,
+    `- Proposed links copy: \`${result.reportFiles.linksProposed}\``,
+  ].join('\n');
+}
+
+export function runDreamSandboxPromotionCanonicalPromote(
+  opts: DreamSandboxPromotionCanonicalOptions,
+): DreamSandboxPromotionCanonicalResult {
+  if (!opts.promotionPacketRoot) throw new Error('--promotion-packet is required');
+  if (!opts.canonicalRoot) throw new Error('--canonical-root is required');
+  if (!opts.targetPage) throw new Error('--target-page is required');
+  if (!opts.reportRoot) throw new Error('--write-promotion-report is required');
+
+  const packetRoot = resolve(opts.promotionPacketRoot);
+  const canonicalRoot = resolve(opts.canonicalRoot);
+  const reportRoot = resolve(opts.reportRoot);
+  const targetPage = normalizeTargetPageSlug(opts.targetPage);
+  assertSafeDreamSandboxRoot(packetRoot, canonicalRoot);
+  assertSafeDreamSandboxRoot(reportRoot, canonicalRoot);
+  if (reportRoot.startsWith(packetRoot + '/')) {
+    throw new Error('Canonical promotion report root must be outside the promotion packet root');
+  }
+
+  const packet = readPromotionPacketManifest(packetRoot);
+  const files = {
+    linksProposed: join(packetRoot, 'proposed', 'links-proposed.json'),
+    promotionSummary: join(packetRoot, 'proposed', 'promotion-summary.md'),
+    canonicalNoteDraft: join(packetRoot, 'proposed', 'canonical-note-draft.md'),
+    humanDecision: join(packetRoot, 'review', 'human-decision.md'),
+  };
+  for (const [label, path] of Object.entries(files)) requirePacketFile(path, label);
+  const decision = parseCanonicalPromotionDecision(files.humanDecision, targetPage);
+
+  const targetPath = resolve(canonicalRoot, `${targetPage}.md`);
+  assertPathInsideRoot(targetPath, canonicalRoot, 'Canonical promotion target page');
+  if (!existsSync(targetPath)) throw new Error(`Canonical promotion requires an existing target page: ${targetPath}`);
+
+  const before = readFileSync(targetPath, 'utf8');
+  if (before.includes(packet.contentHash)) {
+    throw new Error(`Canonical target page already contains source content hash: ${packet.contentHash}`);
+  }
+  const appendBlock = renderCanonicalPromotionBlock(packet, decision);
+  const after = before.trimEnd() + '\n\n' + appendBlock + '\n';
+
+  mkdirSync(reportRoot, { recursive: true });
+  const reportFiles = {
+    markdown: join(reportRoot, 'canonical-promotion-report.md'),
+    json: join(reportRoot, 'canonical-promotion-report.json'),
+    diff: join(reportRoot, 'canonical-promotion-diff.md'),
+    linksProposed: join(reportRoot, 'links-proposed.json'),
+  };
+
+  writeFileSync(targetPath, after, 'utf8');
+  writeFileSync(reportFiles.diff, renderCanonicalPromotionDiff(targetPath, appendBlock), 'utf8');
+  writeFileSync(reportFiles.linksProposed, readFileSync(files.linksProposed, 'utf8'), 'utf8');
+
+  const result: DreamSandboxPromotionCanonicalResult = {
+    status: 'canonical-main-lane-promoted',
+    promotionPacketRoot: packetRoot,
+    canonicalRoot,
+    reportRoot,
+    sourceSlug: packet.sourceSlug,
+    contentHash: packet.contentHash,
+    targetPage,
+    targetPath,
+    targetBeforeHash: sha256(before),
+    targetAfterHash: sha256(after),
+    canonicalSummary: decision.summary,
+    reportFiles,
+    sideEffects: {
+      llmCalls: 0,
+      minionJobs: 0,
+      liveDbWrites: 0,
+      canonicalVaultWrites: 1,
+      proposedLinkWrites: 0,
+      liveSyncRuns: 0,
+      reportWrites: 4,
+    },
+  };
+
+  writeFileSync(result.reportFiles.markdown, renderCanonicalPromotionReport(result), 'utf8');
   writeFileSync(result.reportFiles.json, JSON.stringify(result, null, 2) + '\n', 'utf8');
   return result;
 }
