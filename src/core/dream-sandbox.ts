@@ -22,12 +22,34 @@ export interface DreamSandboxResult {
   written: boolean;
   contentHash: string;
   transcriptBytes: number;
-  sideEffects: {
-    llmCalls: 0;
-    minionJobs: 0;
-    liveDbWrites: 0;
-    canonicalVaultWrites: 0;
-  };
+  sideEffects: DreamSandboxSideEffects;
+}
+
+export interface DreamSandboxSideEffects {
+  llmCalls: 0;
+  minionJobs: 0;
+  liveDbWrites: 0;
+  canonicalVaultWrites: 0;
+}
+
+export type DreamSandboxCheckStatus = 'pass' | 'deferred' | 'fail';
+
+export interface DreamSandboxGoalCheck {
+  id: string;
+  upstreamGoal: string;
+  status: DreamSandboxCheckStatus;
+  finding: string;
+}
+
+export interface DreamSandboxEvaluation {
+  overallStatus: 'sandbox-pass-needs-human-review' | 'sandbox-fail';
+  slug: string;
+  outputPath: string;
+  input: string;
+  contentHash: string;
+  sideEffects: DreamSandboxSideEffects;
+  upstreamGoalChecks: DreamSandboxGoalCheck[];
+  recommendations: string[];
 }
 
 export function assertSafeDreamSandboxRoot(
@@ -147,4 +169,98 @@ export function runDreamSandbox(opts: DreamSandboxOptions): DreamSandboxResult {
     return { ...result, written: true };
   }
   return result;
+}
+
+export function evaluateDreamSandbox(result: DreamSandboxResult): DreamSandboxEvaluation {
+  const checks: DreamSandboxGoalCheck[] = [
+    {
+      id: 'quote-user-verbatim',
+      upstreamGoal: 'Quote the user verbatim; do not paraphrase memorable phrasing.',
+      status: result.markdown.includes('```text') ? 'pass' : 'fail',
+      finding: result.markdown.includes('```text')
+        ? 'The sandbox artifact preserves a verbatim transcript excerpt instead of pretending to synthesize canonical memory.'
+        : 'The artifact does not include a verbatim transcript excerpt.',
+    },
+    {
+      id: 'cross-reference-existing-brain',
+      upstreamGoal: 'Cross-reference existing brain content after searching before writes.',
+      status: 'deferred',
+      finding: 'Deferred intentionally: the sandbox evaluator does not connect to live GBrain or run search, so it cannot safely assert existing-page wikilinks yet.',
+    },
+    {
+      id: 'allowed-namespace',
+      upstreamGoal: 'Write only to an allowlisted namespace.',
+      status: result.slug.startsWith('experiments/dreams/') ? 'pass' : 'fail',
+      finding: `Output slug is ${result.slug}; expected experimental namespace experiments/dreams/...`,
+    },
+    {
+      id: 'slug-discipline',
+      upstreamGoal: 'Use lowercase alphanumeric/hyphen slash-separated slugs with no extensions.',
+      status: /^[a-z0-9][a-z0-9-]*(\/[a-z0-9][a-z0-9-]*)*$/.test(result.slug) ? 'pass' : 'fail',
+      finding: 'Slug format is checked locally before any promotion path exists.',
+    },
+    {
+      id: 'no-canonical-write',
+      upstreamGoal: 'Do not write directly to canonical live pages during first evaluation.',
+      status: result.sideEffects.liveDbWrites === 0 && result.sideEffects.canonicalVaultWrites === 0 ? 'pass' : 'fail',
+      finding: 'Sandbox command reports zero live DB writes and zero canonical Obsidian writes.',
+    },
+    {
+      id: 'human-review-required',
+      upstreamGoal: 'Require human review before synthesized output becomes canonical memory.',
+      status: result.markdown.includes('Promotion checklist') && result.markdown.includes('sandbox-only') ? 'pass' : 'fail',
+      finding: 'Artifact includes sandbox-only warning plus a promotion checklist.',
+    },
+  ];
+  const failed = checks.some(c => c.status === 'fail');
+  return {
+    overallStatus: failed ? 'sandbox-fail' : 'sandbox-pass-needs-human-review',
+    slug: result.slug,
+    outputPath: result.outputPath,
+    input: result.input,
+    contentHash: result.contentHash,
+    sideEffects: result.sideEffects,
+    upstreamGoalChecks: checks,
+    recommendations: [
+      'No live promotion is allowed from this report.',
+      'Human-review the sandbox artifact before designing any canonical write path.',
+      'Keep the next Step 6 slice sandboxed; do not add Anthropic calls, minions, live DB writes, or canonical vault writes yet.',
+      'If the format is useful, next add fixture-based quality cases for real session patterns before any live integration.',
+    ],
+  };
+}
+
+export function renderDreamSandboxEvaluationMarkdown(evaluation: DreamSandboxEvaluation): string {
+  const lines: string[] = [];
+  lines.push('# Dream Sandbox Evaluation');
+  lines.push('');
+  lines.push(`- Status: \`${evaluation.overallStatus}\``);
+  lines.push(`- Input: \`${evaluation.input}\``);
+  lines.push(`- Output: \`${evaluation.outputPath}\``);
+  lines.push(`- Slug: \`${evaluation.slug}\``);
+  lines.push(`- Content hash: \`${evaluation.contentHash}\``);
+  lines.push('');
+  lines.push('## Safety side effects');
+  lines.push('');
+  lines.push(`- LLM calls: ${evaluation.sideEffects.llmCalls}`);
+  lines.push(`- Minion/subagent jobs: ${evaluation.sideEffects.minionJobs}`);
+  lines.push(`- Live GBrain DB writes: ${evaluation.sideEffects.liveDbWrites}`);
+  lines.push(`- Canonical Obsidian writes: ${evaluation.sideEffects.canonicalVaultWrites}`);
+  lines.push('');
+  lines.push('## Upstream goal comparison');
+  lines.push('');
+  for (const check of evaluation.upstreamGoalChecks) {
+    lines.push(`### ${check.id}`);
+    lines.push('');
+    lines.push(`- Status: \`${check.status}\``);
+    lines.push(`- Upstream goal: ${check.upstreamGoal}`);
+    lines.push(`- Finding: ${check.finding}`);
+    lines.push('');
+  }
+  lines.push('## Recommendations');
+  lines.push('');
+  for (const recommendation of evaluation.recommendations) {
+    lines.push(`- ${recommendation}`);
+  }
+  return lines.join('\n');
 }

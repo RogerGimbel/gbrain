@@ -4,7 +4,9 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   assertSafeDreamSandboxRoot,
+  evaluateDreamSandbox,
   planDreamSandbox,
+  renderDreamSandboxEvaluationMarkdown,
   runDreamSandbox,
 } from '../src/core/dream-sandbox.ts';
 
@@ -113,6 +115,65 @@ describe('dream synthesis sandbox', () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.written).toBe(false);
     expect(parsed.slug).toStartWith('experiments/dreams/2026-04-30/');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('evaluates sandbox output against upstream synthesis goals without promotion', () => {
+    const root = makeTmpDir();
+    const input = makeTranscript(root);
+    const outputRoot = join(root, 'sandbox-output');
+    const result = runDreamSandbox({ input, outputRoot, dryRun: false });
+
+    const evaluation = evaluateDreamSandbox(result);
+
+    expect(evaluation.overallStatus).toBe('sandbox-pass-needs-human-review');
+    expect(evaluation.upstreamGoalChecks.map(c => c.id)).toEqual([
+      'quote-user-verbatim',
+      'cross-reference-existing-brain',
+      'allowed-namespace',
+      'slug-discipline',
+      'no-canonical-write',
+      'human-review-required',
+    ]);
+    expect(evaluation.upstreamGoalChecks.find(c => c.id === 'allowed-namespace')?.status).toBe('pass');
+    expect(evaluation.upstreamGoalChecks.find(c => c.id === 'cross-reference-existing-brain')?.status).toBe('deferred');
+    expect(evaluation.sideEffects).toEqual(result.sideEffects);
+
+    const markdown = renderDreamSandboxEvaluationMarkdown(evaluation);
+    expect(markdown).toContain('# Dream Sandbox Evaluation');
+    expect(markdown).toContain('sandbox-pass-needs-human-review');
+    expect(markdown).toContain('No live promotion is allowed from this report.');
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('CLI can write a sandbox evaluation report artifact without database access', async () => {
+    const root = makeTmpDir();
+    const input = makeTranscript(root);
+    const outputRoot = join(root, 'sandbox-output');
+    const reportPath = join(root, 'evaluation.md');
+
+    const proc = Bun.spawn([
+      'bun', 'run', 'src/cli.ts', 'dream-sandbox',
+      '--input', input,
+      '--output', outputRoot,
+      '--write-eval', reportPath,
+      '--json',
+    ], {
+      cwd: new URL('..', import.meta.url).pathname,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(0);
+    expect(stderr).toBe('');
+    const parsed = JSON.parse(stdout);
+    expect(parsed.evaluationPath).toBe(reportPath);
+    expect(parsed.evaluation.overallStatus).toBe('sandbox-pass-needs-human-review');
+    expect(existsSync(reportPath)).toBe(true);
+    expect(readFileSync(reportPath, 'utf8')).toContain('## Upstream goal comparison');
 
     rmSync(root, { recursive: true, force: true });
   });

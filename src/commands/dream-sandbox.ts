@@ -1,4 +1,11 @@
-import { runDreamSandbox } from '../core/dream-sandbox.ts';
+import { mkdirSync, writeFileSync } from 'fs';
+import { dirname } from 'path';
+import {
+  assertSafeDreamSandboxRoot,
+  evaluateDreamSandbox,
+  renderDreamSandboxEvaluationMarkdown,
+  runDreamSandbox,
+} from '../core/dream-sandbox.ts';
 
 interface ParsedDreamSandboxArgs {
   input?: string;
@@ -6,6 +13,7 @@ interface ParsedDreamSandboxArgs {
   dryRun: boolean;
   json: boolean;
   canonicalRoot?: string;
+  writeEval?: string;
 }
 
 function printDreamSandboxHelp(): void {
@@ -25,6 +33,7 @@ Options:
   --output <dir>              Sandbox output root (required)
   --dry-run                   Render the artifact plan without writing files
   --json                      Emit machine-readable JSON
+  --write-eval <file.md>      Write a sandbox-only evaluation report artifact
   --canonical-root <dir>      Canonical vault root to refuse (default: Roger's Winston vault)
 `);
 }
@@ -50,6 +59,9 @@ function parseArgs(args: string[]): ParsedDreamSandboxArgs {
       case '--json':
         parsed.json = true;
         break;
+      case '--write-eval':
+        parsed.writeEval = args[++i];
+        break;
       case '--canonical-root':
         parsed.canonicalRoot = args[++i];
         break;
@@ -71,6 +83,14 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
     dryRun: parsed.dryRun,
     canonicalRoot: parsed.canonicalRoot,
   });
+  const evaluation = evaluateDreamSandbox(result);
+  let evaluationPath: string | undefined;
+  if (parsed.writeEval) {
+    evaluationPath = parsed.writeEval;
+    assertSafeDreamSandboxRoot(dirname(evaluationPath), parsed.canonicalRoot);
+    mkdirSync(dirname(evaluationPath), { recursive: true });
+    writeFileSync(evaluationPath, renderDreamSandboxEvaluationMarkdown(evaluation), 'utf8');
+  }
 
   if (parsed.json) {
     console.log(JSON.stringify({
@@ -83,6 +103,8 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
       contentHash: result.contentHash,
       transcriptBytes: result.transcriptBytes,
       sideEffects: result.sideEffects,
+      evaluation,
+      evaluationPath,
     }, null, 2));
     return;
   }
@@ -90,7 +112,9 @@ export async function runDreamSandboxCommand(args: string[]): Promise<void> {
   console.log([
     `Dream sandbox ${result.written ? 'wrote' : 'planned'}: ${result.slug}`,
     `Output: ${result.outputPath}`,
+    evaluationPath ? `Evaluation: ${evaluationPath}` : undefined,
     `Transcript bytes: ${result.transcriptBytes}`,
+    `Evaluation status: ${evaluation.overallStatus}`,
     'Side effects: llm=0 minions=0 live_db=0 canonical_vault=0',
-  ].join('\n'));
+  ].filter(Boolean).join('\n'));
 }
