@@ -18,7 +18,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet', 'capability-catalog', 'orphan-report', 'retrieval-experiment', 'proactive-synthesis', 'promotion-queue', 'source-fix-proposals', 'fleet-drift']);
+const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet', 'capability-catalog', 'orphan-report', 'retrieval-experiment', 'proactive-synthesis', 'promotion-queue', 'source-fix-proposals', 'fleet-drift', 'retrieval-canary']);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -380,6 +380,20 @@ async function handleCliOnly(command: string, args: string[]) {
     await runFleetDriftCommand(args);
     return;
   }
+  if (command === 'retrieval-canary') {
+    const { runRetrievalCanaryCommand } = await import('./commands/retrieval-canary.ts');
+    if (args.includes('--gate')) {
+      await runRetrievalCanaryCommand(null, args);
+    } else {
+      const engine = await connectEngine();
+      try {
+        await runRetrievalCanaryCommand(engine, args);
+      } finally {
+        await engine.disconnect();
+      }
+    }
+    return;
+  }
 
   // All remaining CLI-only commands need a DB connection
   const engine = await connectEngine();
@@ -588,6 +602,7 @@ TOOLS
   promotion-queue scan --input DIR   Scan sandbox artifacts into a gated promotion queue
   source-fix-proposals --dir DIR     Propose source metadata frontmatter fixes
   fleet-drift --dir DIR              Report stale/conflicting/dead-reference fleet knowledge
+  retrieval-canary --gate FILE       Shadow/canary scoped retrieval candidate report
   publish <page.md> [--password]     Shareable HTML (strips private data, optional AES-256)
   check-backlinks <check|fix> [dir]  Find/fix missing back-links across brain
   lint <dir|file> [--fix]            Catch LLM artifacts, placeholder dates, bad frontmatter
