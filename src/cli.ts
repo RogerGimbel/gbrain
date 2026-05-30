@@ -18,7 +18,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health']);
+const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet']);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -350,6 +350,11 @@ async function handleCliOnly(command: string, args: string[]) {
     await runSourceHealth(args);
     return;
   }
+  if (command === 'session-packet') {
+    const { runSessionPacketCommand } = await import('./commands/session-packet.ts');
+    await runSessionPacketCommand(args);
+    return;
+  }
 
   // All remaining CLI-only commands need a DB connection
   const engine = await connectEngine();
@@ -538,6 +543,8 @@ TOOLS
   dream-sandbox --input <file> --output <dir>
                                       Sandbox transcript-to-dream artifact, no live writes
   source-health [dir] [--json]       Source attribution health for fleet/checkpoint markdown
+  session-packet --input <file> --output <dir>
+                                      Sandbox session packet, no live writes
   publish <page.md> [--password]     Shareable HTML (strips private data, optional AES-256)
   check-backlinks <check|fix> [dir]  Find/fix missing back-links across brain
   lint <dir|file> [--fix]            Catch LLM artifacts, placeholder dates, bad frontmatter
