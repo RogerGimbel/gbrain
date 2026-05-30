@@ -18,7 +18,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet', 'capability-catalog', 'orphan-report']);
+const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet', 'capability-catalog', 'orphan-report', 'retrieval-experiment']);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -441,6 +441,11 @@ async function handleCliOnly(command: string, args: string[]) {
         await runOrphanReport(engine, args);
         break;
       }
+      case 'retrieval-experiment': {
+        const { runRetrievalExperimentCommand } = await import('./commands/retrieval-experiment.ts');
+        await runRetrievalExperimentCommand(engine, args);
+        break;
+      }
     }
   } finally {
     if (command !== 'serve') await engine.disconnect();
@@ -531,6 +536,7 @@ LINKS
   graph-query <slug> [--type T]      Edge-based traversal with type/direction filters
         [--depth N] [--direction in|out|both]
   orphan-report [--output dir]       Report graph orphan pages; optional index artifact
+  retrieval-experiment --canonical   Gated baseline-vs-candidate search experiment
 
 TAGS
   tags <slug>                        List tags
