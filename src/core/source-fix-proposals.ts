@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
-import { basename, join, relative } from 'path';
+import { basename, join, relative, resolve, sep } from 'path';
 
 export interface SourceFixProposalInput {
   root: string;
@@ -32,6 +32,52 @@ export interface SourceFixProposalReport {
   proposals: SourceFixProposal[];
   sideEffects: {
     canonicalVaultWrites: 0;
+    liveDbWrites: 0;
+    liveSync: 0;
+  };
+}
+
+export type SourceFixConfidence = 'low' | 'medium' | 'high';
+export type SourceFixApplyStatus = 'eligible' | 'applied' | 'skipped' | 'blocked';
+
+export interface SourceFixApplyInput {
+  reportPath: string;
+  root: string;
+  outputRoot?: string;
+  apply?: boolean;
+  dryRun?: boolean;
+  minConfidence?: SourceFixConfidence;
+  excludeUnknown?: boolean;
+  limit?: number;
+}
+
+export interface SourceFixApplyItem {
+  path: string;
+  status: SourceFixApplyStatus;
+  confidence: SourceFixConfidence;
+  proposed_frontmatter: Record<string, string>;
+  reasons: string[];
+}
+
+export interface SourceFixApplyReceipt {
+  schema_version: 1;
+  generated_at: string;
+  report_path: string;
+  root: string;
+  apply: boolean;
+  min_confidence: SourceFixConfidence;
+  exclude_unknown: boolean;
+  limit?: number;
+  summary: {
+    proposals_seen: number;
+    eligible: number;
+    applied: number;
+    skipped: number;
+    blocked: number;
+  };
+  items: SourceFixApplyItem[];
+  sideEffects: {
+    canonicalVaultWrites: number;
     liveDbWrites: 0;
     liveSync: 0;
   };
@@ -100,6 +146,141 @@ export function renderSourceFixProposalMarkdown(report: SourceFixProposalReport)
     lines.push('');
   }
   return lines.join('\n');
+}
+
+export function applySourceFixProposals(input: SourceFixApplyInput): SourceFixApplyReceipt {
+  if (!existsSync(input.reportPath)) throw new Error(`Source fix proposal report not found: ${input.reportPath}`);
+  if (!existsSync(input.root)) throw new Error(`Root not found: ${input.root}`);
+  const report = JSON.parse(readFileSync(input.reportPath, 'utf8')) as SourceFixProposalReport;
+  const minConfidence = input.minConfidence ?? 'medium';
+  const excludeUnknown = input.excludeUnknown ?? true;
+  const apply = Boolean(input.apply) && !input.dryRun;
+  const limit = input.limit;
+  const items: SourceFixApplyItem[] = [];
+  let selected = 0;
+  let applied = 0;
+
+  for (const proposal of report.proposals ?? []) {
+    const reasons = eligibilityReasons(input.root, proposal, minConfidence, excludeUnknown, limit, selected);
+    const eligible = reasons.length === 0;
+    if (eligible) selected += 1;
+    let status: SourceFixApplyStatus = eligible ? 'eligible' : reasons.some(r => r.includes('escapes root') || r.includes('not found')) ? 'blocked' : 'skipped';
+    if (eligible && apply) {
+      const target = resolve(input.root, proposal.path);
+      const content = readFileSync(target, 'utf8');
+      const updated = applyFrontmatterAdditions(content, proposal.proposed_frontmatter);
+      if (updated === content) {
+        status = 'skipped';
+        reasons.push('all proposed frontmatter already present');
+      } else {
+        writeFileSync(target, updated, 'utf8');
+        status = 'applied';
+        applied += 1;
+      }
+    }
+    items.push({
+      path: proposal.path,
+      status,
+      confidence: proposal.confidence,
+      proposed_frontmatter: proposal.proposed_frontmatter,
+      reasons,
+    });
+  }
+
+  const receipt: SourceFixApplyReceipt = {
+    schema_version: 1,
+    generated_at: new Date().toISOString(),
+    report_path: input.reportPath,
+    root: input.root,
+    apply,
+    min_confidence: minConfidence,
+    exclude_unknown: excludeUnknown,
+    limit,
+    summary: {
+      proposals_seen: report.proposals?.length ?? 0,
+      eligible: items.filter(i => i.status === 'eligible' || i.status === 'applied').length,
+      applied: items.filter(i => i.status === 'applied').length,
+      skipped: items.filter(i => i.status === 'skipped').length,
+      blocked: items.filter(i => i.status === 'blocked').length,
+    },
+    items,
+    sideEffects: { canonicalVaultWrites: applied, liveDbWrites: 0, liveSync: 0 },
+  };
+  if (input.outputRoot) {
+    mkdirSync(input.outputRoot, { recursive: true });
+    writeFileSync(join(input.outputRoot, 'source-fix-apply-receipt.json'), JSON.stringify(receipt, null, 2), 'utf8');
+    writeFileSync(join(input.outputRoot, 'source-fix-apply-receipt.md'), renderSourceFixApplyReceiptMarkdown(receipt), 'utf8');
+  }
+  return receipt;
+}
+
+export function renderSourceFixApplyReceiptMarkdown(receipt: SourceFixApplyReceipt): string {
+  return [
+    '# Source Metadata Apply Receipt',
+    '',
+    `Generated: ${receipt.generated_at}`,
+    `Mode: ${receipt.apply ? 'apply' : 'dry-run'}`,
+    `Root: \`${receipt.root}\``,
+    `Report: \`${receipt.report_path}\``,
+    '',
+    '## Summary',
+    '',
+    `- proposals seen: ${receipt.summary.proposals_seen}`,
+    `- eligible: ${receipt.summary.eligible}`,
+    `- applied: ${receipt.summary.applied}`,
+    `- skipped: ${receipt.summary.skipped}`,
+    `- blocked: ${receipt.summary.blocked}`,
+    `- canonical vault writes: ${receipt.sideEffects.canonicalVaultWrites}`,
+    `- live DB writes: ${receipt.sideEffects.liveDbWrites}`,
+    `- live sync: ${receipt.sideEffects.liveSync}`,
+    '',
+    '## Items',
+    '',
+    ...receipt.items.map(item => `- ${item.status}: ${item.path}${item.reasons.length ? ` — ${item.reasons.join('; ')}` : ''}`),
+    '',
+  ].join('\n');
+}
+
+function eligibilityReasons(root: string, proposal: SourceFixProposal, minConfidence: SourceFixConfidence, excludeUnknown: boolean, limit: number | undefined, applied: number): string[] {
+  const reasons: string[] = [];
+  if (confidenceRank(proposal.confidence) < confidenceRank(minConfidence)) reasons.push(`confidence ${proposal.confidence} below ${minConfidence}`);
+  if (excludeUnknown && proposal.proposed_frontmatter.source_agent === 'unknown') reasons.push('source_agent unknown requires manual review');
+  const target = resolve(root, proposal.path);
+  if (pathEscapesRoot(root, target)) reasons.push(`proposal path escapes root: ${proposal.path}`);
+  else if (!existsSync(target)) reasons.push(`target file not found: ${proposal.path}`);
+  if (limit !== undefined && applied >= limit) reasons.push(`limit ${limit} reached`);
+  return reasons;
+}
+
+function confidenceRank(confidence: SourceFixConfidence): number {
+  return { low: 0, medium: 1, high: 2 }[confidence];
+}
+
+function pathEscapesRoot(root: string, target: string): boolean {
+  const rel = relative(resolve(root), resolve(target));
+  return rel === '..' || rel.startsWith(`..${sep}`) || rel.startsWith('/') || rel === '' && false;
+}
+
+function applyFrontmatterAdditions(content: string, additions: Record<string, string>): string {
+  const keys = Object.keys(additions).filter(key => !frontmatterHasKey(content, key));
+  if (keys.length === 0) return content;
+  const lines = keys.map(key => `${key}: ${additions[key]}`);
+  if (content.startsWith('---\n')) {
+    const end = content.indexOf('\n---', 4);
+    if (end !== -1) return `${content.slice(0, end)}\n${lines.join('\n')}${content.slice(end)}`;
+  }
+  return `---\n${lines.join('\n')}\n---\n\n${content}`;
+}
+
+function frontmatterHasKey(content: string, key: string): boolean {
+  if (!content.startsWith('---\n')) return false;
+  const end = content.indexOf('\n---', 4);
+  if (end === -1) return false;
+  return new RegExp(`^${escapeRegExp(key)}\\s*:`, 'm').test(content.slice(4, end));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function proposalForFile(root: string, file: string, now: Date): SourceFixProposal | undefined {

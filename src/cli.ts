@@ -18,7 +18,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet', 'capability-catalog', 'orphan-report', 'retrieval-experiment', 'proactive-synthesis', 'promotion-queue', 'source-fix-proposals', 'fleet-drift', 'retrieval-canary', 'route-suggest', 'fleet-digest', 'controlled-promote']);
+const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet', 'capability-catalog', 'orphan-report', 'retrieval-experiment', 'proactive-synthesis', 'promotion-queue', 'source-fix-proposals', 'source-fix-apply', 'fleet-drift', 'retrieval-canary', 'route-suggest', 'fleet-digest', 'controlled-promote']);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -375,6 +375,11 @@ async function handleCliOnly(command: string, args: string[]) {
     await runSourceFixProposalsCommand(args);
     return;
   }
+  if (command === 'source-fix-apply') {
+    const { runSourceFixApplyCommand } = await import('./commands/source-fix-apply.ts');
+    await runSourceFixApplyCommand(args);
+    return;
+  }
   if (command === 'fleet-drift') {
     const { runFleetDriftCommand } = await import('./commands/fleet-drift.ts');
     await runFleetDriftCommand(args);
@@ -616,6 +621,7 @@ TOOLS
   proactive-synthesis --output DIR   Sandbox fleet synthesis brief, no live writes
   promotion-queue scan --input DIR   Scan sandbox artifacts into a gated promotion queue
   source-fix-proposals --dir DIR     Propose source metadata frontmatter fixes
+  source-fix-apply --report JSON     Reviewed source metadata apply lane (dry-run default)
   fleet-drift --dir DIR              Report stale/conflicting/dead-reference fleet knowledge
   retrieval-canary --gate FILE       Shadow/canary scoped retrieval candidate report
   route-suggest --catalog FILE       Suggest agent/skill route from capability catalog
