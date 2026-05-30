@@ -39,7 +39,8 @@ export function planRetrievalCanary(input: RetrievalCanaryInput): RetrievalCanar
   const allowed = input.allowedProfiles ?? [];
   if (input.mode === 'canary') {
     if (!input.profile) blockers.push('canary mode requires --profile');
-    if (input.profile && allowed.length > 0 && !allowed.includes(input.profile)) blockers.push(`profile ${input.profile} is not allowlisted for retrieval canary`);
+    if (allowed.length === 0) blockers.push('canary mode requires at least one explicit --allow-profile entry');
+    if (input.profile && !allowed.includes(input.profile)) blockers.push(`profile ${input.profile} is not allowlisted for retrieval canary`);
     if (!input.gate.ok) blockers.push('retrieval experiment gate failed');
   }
   const canaryEnabled = input.mode === 'canary' && blockers.length === 0;

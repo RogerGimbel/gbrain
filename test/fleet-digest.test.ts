@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildFleetDigest, renderFleetDigestMarkdown } from '../src/core/fleet-digest.ts';
@@ -35,6 +35,38 @@ describe('fleet digest', () => {
 
     expect(markdown).toContain('# Fleet Digest');
     expect(markdown).toContain('## Recommendations');
+    expect(markdown).not.toContain('|');
+  });
+
+  test('degrades gracefully when inputs are missing or malformed and queue is blocked-heavy', () => {
+    const root = tmp();
+    const output = join(root, 'digest');
+    const queuePath = join(root, 'blocked-heavy-promotion-queue.json');
+    const badSourcePath = join(root, 'bad-source-health.json');
+    const missingDriftPath = join(root, 'missing-fleet-drift.json');
+    const blockedCanaryPath = join(root, 'blocked-retrieval-canary.json');
+    writeFileSync(queuePath, JSON.stringify({ summary: { ready_items: 0, blocked_items: 4, total_items: 4, high_risk_items: 3 } }), 'utf8');
+    writeFileSync(badSourcePath, '{ this is not json', 'utf8');
+    writeFileSync(blockedCanaryPath, JSON.stringify({ mode: 'canary', gate_ok: true, canary_enabled: false, rollback_required: true, gate_metrics: { protected_top1_passed: 13, protected_top1_total: 13, mean_mrr_delta: 0 } }), 'utf8');
+
+    const digest = buildFleetDigest({
+      outputRoot: output,
+      promotionQueuePath: queuePath,
+      sourceHealthPath: badSourcePath,
+      fleetDriftPath: missingDriftPath,
+      retrievalCanaryPath: blockedCanaryPath,
+    });
+    const markdown = readFileSync(join(output, 'fleet-digest.md'), 'utf8');
+
+    expect(digest.sections.promotion_queue).toContain('0 ready, 4 blocked');
+    expect(digest.sections.source_health).toMatch(/unavailable|malformed/i);
+    expect(digest.sections.fleet_drift).toMatch(/unavailable|missing/i);
+    expect(digest.sections.retrieval_canary).toContain('canary mode');
+    expect(digest.recommendations.join('\n')).toMatch(/blocked promotion|degraded|missing|malformed|canary disabled/i);
+    expect(digest.delivery.telegram_ready).toBe(true);
+    expect(digest.delivery.scheduled_safe).toBe(true);
+    expect(digest.sideEffects).toEqual({ canonicalVaultWrites: 0, liveDbWrites: 0, taskExecutions: 0 });
+    expect(markdown).toContain('## Degraded Inputs');
     expect(markdown).not.toContain('|');
   });
 });

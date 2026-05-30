@@ -55,6 +55,16 @@ describe('retrieval canary planner', () => {
     expect(blockedProfile.blockers.join('\n')).toMatch(/not allowlisted/i);
   });
 
+  test('canary mode requires an explicit allow-profile entry', () => {
+    const missingAllowlist = planRetrievalCanary({ mode: 'canary', profile: 'Hermes', allowedProfiles: [], gate: gate(true), dryRun: true });
+
+    expect(missingAllowlist.canary_enabled).toBe(false);
+    expect(missingAllowlist.candidate_served).toBe(false);
+    expect(missingAllowlist.baseline_returned).toBe(true);
+    expect(missingAllowlist.rollback_required).toBe(true);
+    expect(missingAllowlist.blockers.join('\n')).toMatch(/allow-profile|allowlist/i);
+  });
+
   test('renders explicit rollback and no-global-change notes', () => {
     const result = planRetrievalCanary({ mode: 'canary', profile: 'Hermes', allowedProfiles: ['Hermes'], gate: gate(true), dryRun: true });
     const markdown = renderRetrievalCanaryMarkdown(result);

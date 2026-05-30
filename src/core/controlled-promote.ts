@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { basename, extname, join, resolve } from 'path';
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'path';
 
 export interface ControlledPromoteInput {
   itemPath: string;
@@ -56,9 +56,9 @@ const SECRET_PATTERNS = [
 export function planControlledPromotion(input: ControlledPromoteInput): ControlledPromotionReceipt {
   const item = loadItem(input.itemPath);
   const artifactContent = existsSync(item.path) ? readFileSync(item.path, 'utf8') : '';
-  const blockers = blockersFor(item, artifactContent, input.namespace, input.allowedNamespaces ?? DEFAULT_ALLOWED_NAMESPACES);
   const targetPath = targetPathFor(input.targetRoot, input.namespace, item, artifactContent);
   const promotedContent = renderPromotedArtifact(item, artifactContent, input.namespace);
+  const blockers = blockersFor(item, artifactContent, input.namespace, input.allowedNamespaces ?? DEFAULT_ALLOWED_NAMESPACES, input.targetRoot, targetPath);
   return {
     ok: blockers.length === 0,
     applied: false,
@@ -94,9 +94,12 @@ function loadItem(path: string): PromotionItem {
   return item;
 }
 
-function blockersFor(item: PromotionItem, content: string, namespace: string, allowedNamespaces: string[]): string[] {
+function blockersFor(item: PromotionItem, content: string, namespace: string, allowedNamespaces: string[], targetRoot: string, targetPath: string): string[] {
   const blockers = [...(item.blockers ?? [])];
+  if (!isSafeNamespacePath(namespace)) blockers.push(`namespace ${namespace} contains path traversal or absolute path segments`);
   if (!allowedNamespaces.some(ns => namespace === ns || namespace.startsWith(ns + '/'))) blockers.push(`namespace ${namespace} is not allowlisted`);
+  if (targetEscapesRoot(targetRoot, targetPath)) blockers.push(`target path escapes target root: ${targetPath}`);
+  if (existsSync(targetPath)) blockers.push('target artifact already exists; duplicate/replay promotion requires manual handling');
   if (item.status && item.status !== 'ready') blockers.push(`item status is ${item.status}, not ready`);
   if (item.risk === 'high') blockers.push('high-risk item requires manual handling');
   if (item.artifact_class === 'raw-transcript') blockers.push('raw transcript promotion is blocked');
@@ -110,7 +113,7 @@ function targetPathFor(targetRoot: string, namespace: string, item: PromotionIte
   const ext = extname(item.path) || '.md';
   const title = slugify(item.title ?? basename(item.path, ext));
   const date = new Date().toISOString().slice(0, 10);
-  return join(targetRoot, namespace, `${date}-${title}-${checksum}${ext}`);
+  return join(targetRoot, safeNamespaceForTarget(namespace), `${date}-${title}-${checksum}${ext}`);
 }
 
 function renderPromotedArtifact(item: PromotionItem, content: string, namespace: string): string {
@@ -133,6 +136,22 @@ function renderPromotedArtifact(item: PromotionItem, content: string, namespace:
 
 function renderDiff(targetPath: string, content: string): string {
   return [`--- /dev/null`, `+++ ${targetPath}`, '@@ controlled promotion @@', ...content.split('\n').map(line => `+${line}`)].join('\n');
+}
+
+function safeNamespaceForTarget(namespace: string): string {
+  return isSafeNamespacePath(namespace) ? namespace : 'blocked/invalid-namespace';
+}
+
+function isSafeNamespacePath(namespace: string): boolean {
+  if (!namespace || isAbsolute(namespace) || namespace.includes('\\')) return false;
+  return !namespace.split('/').some(part => part === '..' || part === '.');
+}
+
+function targetEscapesRoot(targetRoot: string, targetPath: string): boolean {
+  const root = resolve(targetRoot);
+  const target = resolve(targetPath);
+  const rel = relative(root, target);
+  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
 
 function slugify(value: string): string {

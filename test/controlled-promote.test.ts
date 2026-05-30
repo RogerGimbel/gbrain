@@ -65,7 +65,7 @@ describe('controlled promote', () => {
     const highRisk = planControlledPromotion({ itemPath: item(root, { risk: 'high' }), targetRoot, namespace: 'knowledge/reports/retrieval-gates' });
     const raw = planControlledPromotion({ itemPath: item(root, { artifact_class: 'raw-transcript' }), targetRoot, namespace: 'knowledge/reports/retrieval-gates' });
     const secretArtifact = join(root, 'secret.md');
-    writeFileSync(secretArtifact, 'api_key = sk-1234567890abcdef1234567890abcdef', 'utf8');
+    writeFileSync(secretArtifact, 'api_key = sk-123...cdef', 'utf8');
     const secretManifest = item(root, { path: secretArtifact });
     const secret = planControlledPromotion({ itemPath: secretManifest, targetRoot, namespace: 'knowledge/reports/retrieval-gates' });
 
@@ -74,5 +74,36 @@ describe('controlled promote', () => {
     expect(raw.ok).toBe(false);
     expect(secret.ok).toBe(false);
     expect([badNamespace, highRisk, raw, secret].flatMap(r => r.blockers).join('\n')).toMatch(/allowlisted|high-risk|raw transcript|secret/i);
+  });
+
+  test('refuses namespace traversal even when the namespace starts with an allowlisted prefix', () => {
+    const root = tmp();
+    const targetRoot = join(root, 'vault');
+    const traversal = planControlledPromotion({
+      itemPath: item(root),
+      targetRoot,
+      namespace: 'knowledge/reports/../../../escape-controlled-promotion-test',
+    });
+
+    expect(traversal.ok).toBe(false);
+    expect(traversal.applied).toBe(false);
+    expect(traversal.target_path).not.toContain('/escape-controlled-promotion-test/');
+    expect(traversal.blockers.join('\n')).toMatch(/namespace|target path|traversal|escape/i);
+  });
+
+  test('refuses duplicate replay instead of overwriting an existing promoted artifact', () => {
+    const root = tmp();
+    const manifest = item(root);
+    const targetRoot = join(root, 'vault');
+    const first = runControlledPromotion({ itemPath: manifest, targetRoot, namespace: 'knowledge/reports/retrieval-gates', apply: true });
+    const replay = runControlledPromotion({ itemPath: manifest, targetRoot, namespace: 'knowledge/reports/retrieval-gates', apply: true });
+
+    expect(first.ok).toBe(true);
+    expect(first.applied).toBe(true);
+    expect(replay.ok).toBe(false);
+    expect(replay.applied).toBe(false);
+    expect(replay.target_path).toBe(first.target_path);
+    expect(replay.sideEffects).toEqual({ canonicalVaultWrites: 0, liveDbWrites: 0, liveSync: 0 });
+    expect(replay.blockers.join('\n')).toMatch(/already exists|duplicate|replay/i);
   });
 });
