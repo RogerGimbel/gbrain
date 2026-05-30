@@ -5,6 +5,7 @@ import { checkResolvable } from '../core/check-resolvable.ts';
 import { join } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { isSourceUnchangedSinceSync } from '../core/git-head.ts';
+import { analyzeFleetSources } from '../core/fleet-source.ts';
 
 export interface Check {
   name: string;
@@ -62,6 +63,22 @@ export async function runDoctor(engine: BrainEngine | null, args: string[]) {
     const skillsDir = join(repoRoot, 'skills');
     const conformanceResult = checkSkillConformance(skillsDir);
     checks.push(conformanceResult);
+  }
+
+  // 2b. Optional source-aware fleet health. Opt-in via env so doctor remains portable.
+  const sourceHealthDir = process.env.GBRAIN_SOURCE_HEALTH_DIR;
+  if (sourceHealthDir) {
+    if (!existsSync(sourceHealthDir)) {
+      checks.push({ name: 'source_health', status: 'warn', message: `GBRAIN_SOURCE_HEALTH_DIR not found: ${sourceHealthDir}` });
+    } else {
+      const report = analyzeFleetSources(sourceHealthDir);
+      const issues = report.summary.missing_source_metadata + report.summary.stale_sources;
+      checks.push({
+        name: 'source_health',
+        status: issues === 0 ? 'ok' : 'warn',
+        message: `${report.summary.source_covered}/${report.summary.total_files} source-covered, ${report.summary.stale_sources} stale`,
+      });
+    }
   }
 
   // --- DB checks (skip if --fast or no engine) ---
