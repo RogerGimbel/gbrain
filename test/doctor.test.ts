@@ -22,8 +22,6 @@ describe('doctor command', () => {
   });
 
   test('Check interface supports issues array', async () => {
-    const { Check } = await import('../src/commands/doctor.ts');
-    // The Check type allows an optional issues array for resolver findings
     const check: import('../src/commands/doctor.ts').Check = {
       name: 'resolver_health',
       status: 'warn',
@@ -36,8 +34,53 @@ describe('doctor command', () => {
 
   test('runDoctor accepts null engine for filesystem-only mode', async () => {
     const { runDoctor } = await import('../src/commands/doctor.ts');
-    // runDoctor should accept null engine — it runs filesystem checks only
-    // We can't call it directly (it calls process.exit), but we verify the signature
-    expect(runDoctor.length).toBe(2); // engine, args
+    expect(runDoctor.length).toBe(2);
   });
 });
+
+describe('checkSyncFreshness', () => {
+  test('returns ok when no sync repo is configured', async () => {
+    const { checkSyncFreshness } = await import('../src/commands/doctor.ts');
+    const engine = makeConfigEngine({});
+    const check = await checkSyncFreshness(engine as any);
+    expect(check.status).toBe('ok');
+    expect(check.name).toBe('sync_freshness');
+    expect(check.message).toContain('No sync repo configured');
+  });
+
+  test('returns ok when local git HEAD still matches sync.last_commit and tree is clean', async () => {
+    const { checkSyncFreshness } = await import('../src/commands/doctor.ts');
+    const { _setGitHeadProbeForTests, _setGitCleanProbeForTests } = await import('../src/core/git-head.ts');
+    _setGitHeadProbeForTests(() => 'abc123');
+    _setGitCleanProbeForTests(() => true);
+    try {
+      const engine = makeConfigEngine({ 'sync.repo_path': '/tmp/repo', 'sync.last_commit': 'abc123' });
+      const check = await checkSyncFreshness(engine as any);
+      expect(check.status).toBe('ok');
+      expect(check.message).toContain('unchanged');
+    } finally {
+      _setGitHeadProbeForTests(null);
+      _setGitCleanProbeForTests(null);
+    }
+  });
+
+  test('warns when configured repo has moved or cannot be verified', async () => {
+    const { checkSyncFreshness } = await import('../src/commands/doctor.ts');
+    const { _setGitHeadProbeForTests } = await import('../src/core/git-head.ts');
+    _setGitHeadProbeForTests(() => 'newhead');
+    try {
+      const engine = makeConfigEngine({ 'sync.repo_path': '/tmp/repo', 'sync.last_commit': 'oldhead' });
+      const check = await checkSyncFreshness(engine as any);
+      expect(check.status).toBe('warn');
+      expect(check.message).toContain('not at last synced commit');
+    } finally {
+      _setGitHeadProbeForTests(null);
+    }
+  });
+});
+
+function makeConfigEngine(values: Record<string, string>) {
+  return {
+    getConfig: async (key: string) => values[key] ?? null,
+  };
+}

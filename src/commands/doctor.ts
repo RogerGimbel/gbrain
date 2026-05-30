@@ -4,6 +4,7 @@ import { LATEST_VERSION } from '../core/migrate.ts';
 import { checkResolvable } from '../core/check-resolvable.ts';
 import { join } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
+import { isSourceUnchangedSinceSync } from '../core/git-head.ts';
 
 export interface Check {
   name: string;
@@ -85,6 +86,8 @@ export async function runDoctor(engine: BrainEngine | null, args: string[]) {
     process.exit(earlyFail2 ? 1 : 0);
     return;
   }
+
+  checks.push(await checkSyncFreshness(engine));
 
   // 4. pgvector extension
   try {
@@ -171,6 +174,42 @@ export async function runDoctor(engine: BrainEngine | null, args: string[]) {
   }
 
   process.exit(hasFail ? 1 : 0);
+}
+
+export async function checkSyncFreshness(engine: BrainEngine): Promise<Check> {
+  try {
+    const repoPath = await engine.getConfig('sync.repo_path');
+    const lastCommit = await engine.getConfig('sync.last_commit');
+
+    if (!repoPath || !lastCommit) {
+      return {
+        name: 'sync_freshness',
+        status: 'ok',
+        message: 'No sync repo configured',
+      };
+    }
+
+    if (isSourceUnchangedSinceSync(repoPath, lastCommit, { requireCleanWorkingTree: true })) {
+      return {
+        name: 'sync_freshness',
+        status: 'ok',
+        message: `Sync source unchanged at ${lastCommit.slice(0, 8)}`,
+      };
+    }
+
+    return {
+      name: 'sync_freshness',
+      status: 'warn',
+      message: `Configured sync repo is not at last synced commit ${lastCommit.slice(0, 8)} or has uncommitted changes. Run gbrain sync.`,
+    };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      name: 'sync_freshness',
+      status: 'warn',
+      message: `Could not check sync freshness: ${msg}`,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
