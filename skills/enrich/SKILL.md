@@ -37,7 +37,7 @@ This skill guarantees:
 
 > **Filing rule:** Read `skills/_brain-filing-rules.md` before creating any new page.
 
-## Iron Law: Back-Linking (MANDATORY)
+> **Convention:** See `skills/conventions/quality.md` for Iron Law back-linking.
 
 Every mention of a person or company with a brain page MUST create a back-link
 FROM that entity's page TO the page mentioning them. An unlinked mention is a
@@ -102,7 +102,7 @@ Extract people, companies, concepts from the incoming signal.
 For each entity:
 - `gbrain search "name"` -- does a page already exist?
 - **If yes:** UPDATE path (add new signal, update compiled truth if material)
-- **If no:** CREATE path (check notability gate first, then create)
+- **If no:** CREATE path (check creation eligibility using `skills/_brain-filing-rules.md`, then create)
 
 ### Step 3: Extract signal from source
 

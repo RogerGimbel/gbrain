@@ -66,10 +66,15 @@ export async function runDoctor(engine: BrainEngine | null, args: string[]) {
 
   // --- DB checks (skip if --fast or no engine) ---
 
-  if (fastMode || !engine) {
-    if (!engine) {
-      checks.push({ name: 'connection', status: 'warn', message: 'No database configured (filesystem checks only)' });
-    }
+  if (fastMode) {
+    checks.push({ name: 'connection', status: 'ok', message: 'DB checks skipped by --fast' });
+    const earlyFail1 = outputResults(checks, jsonOutput);
+    process.exit(earlyFail1 ? 1 : 0);
+    return;
+  }
+
+  if (!engine) {
+    checks.push({ name: 'connection', status: 'warn', message: 'No database configured (filesystem checks only)' });
     const earlyFail1 = outputResults(checks, jsonOutput);
     process.exit(earlyFail1 ? 1 : 0);
     return;

@@ -36,6 +36,19 @@ describe('doctor command', () => {
     const { runDoctor } = await import('../src/commands/doctor.ts');
     expect(runDoctor.length).toBe(2);
   });
+
+  test('doctor --fast reports DB checks skipped instead of no database configured', () => {
+    const result = Bun.spawnSync({
+      cmd: ['bun', 'run', 'src/cli.ts', 'doctor', '--fast', '--json'],
+      cwd: import.meta.dir + '/..',
+    });
+    const stdout = new TextDecoder().decode(result.stdout);
+    const payload = JSON.parse(stdout);
+    const connection = payload.checks.find((check: { name: string }) => check.name === 'connection');
+    expect(connection?.status).toBe('ok');
+    expect(connection?.message).toContain('DB checks skipped');
+    expect(connection?.message).not.toContain('No database configured');
+  });
 });
 
 describe('checkSyncFreshness', () => {
