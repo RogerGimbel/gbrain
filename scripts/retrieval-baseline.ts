@@ -9,7 +9,9 @@ import {
   CANONICAL_RETRIEVAL_CASES,
   summarizeRetrievalCase,
   summarizeRetrievalSuite,
+  buildReplayableRetrievalBaselineCapture,
 } from '../src/core/search/retrieval-baseline.ts';
+import { writeEvalCaptureFile } from '../src/core/eval-capture.ts';
 
 function argValue(name: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -86,12 +88,14 @@ async function main() {
     }
 
     const summary = summarizeRetrievalSuite(cases);
+    const generatedAt = new Date().toISOString();
+    const git = {
+      head: process.env.GBRAIN_BASELINE_GIT_HEAD ?? null,
+      branch: process.env.GBRAIN_BASELINE_GIT_BRANCH ?? null,
+    };
     const payload = {
-      generatedAt: new Date().toISOString(),
-      git: {
-        head: process.env.GBRAIN_BASELINE_GIT_HEAD ?? null,
-        branch: process.env.GBRAIN_BASELINE_GIT_BRANCH ?? null,
-      },
+      generatedAt,
+      git,
       limit,
       stats,
       health,
@@ -111,8 +115,16 @@ async function main() {
     mkdirSync(outDir, { recursive: true });
     const jsonPath = join(outDir, `retrieval-baseline-${stamp}.json`);
     const mdPath = join(outDir, `retrieval-baseline-${stamp}.md`);
+    const replayPath = join(outDir, `retrieval-baseline-replay-${stamp}.json`);
 
     writeFileSync(jsonPath, JSON.stringify(payload, null, 2) + '\n');
+    writeEvalCaptureFile(replayPath, buildReplayableRetrievalBaselineCapture(cases, {
+      generatedAt,
+      git: {
+        head: git.head ?? undefined,
+        branch: git.branch ?? undefined,
+      },
+    }));
 
     const md = [
       `# GBrain retrieval baseline — ${payload.generatedAt}`,
@@ -120,6 +132,7 @@ async function main() {
       `- Git branch: ${payload.git.branch ?? '(not supplied)'}`,
       `- Git head: ${payload.git.head ?? '(not supplied)'}`,
       `- Limit per mode: ${limit}`,
+      `- Replay capture: ${replayPath}`,
       `- Pages: ${stats.page_count}`,
       `- Chunks: ${stats.chunk_count}`,
       `- Embedded: ${stats.embedded_count}`,
@@ -158,6 +171,7 @@ async function main() {
       ok: true,
       jsonPath,
       mdPath,
+      replayPath,
       summary,
       health,
       expectedMissing: expectedPageChecks.filter(check => !check.exists),

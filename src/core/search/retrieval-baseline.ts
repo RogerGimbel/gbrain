@@ -1,3 +1,4 @@
+import { buildEvalCaptureFile, type EvalCaptureFile, type EvalCaptureMode } from '../eval-capture.ts';
 import type { SearchResult } from '../types.ts';
 
 export interface CanonicalRetrievalCase {
@@ -158,4 +159,32 @@ export function summarizeRetrievalSuite(summaries: RetrievalCaseSummary[]) {
       return [mode, { total, top1, top3, top10, missing }];
     }),
   );
+}
+
+export interface ReplayableRetrievalBaselineOptions {
+  generatedAt?: string;
+  git?: { branch?: string; head?: string };
+}
+
+export function buildReplayableRetrievalBaselineCapture(
+  summaries: RetrievalCaseSummary[],
+  opts: ReplayableRetrievalBaselineOptions = {},
+): EvalCaptureFile {
+  const modes = [
+    ['hybridNoExpand', 'hybridNoExpand'],
+    ['hybridExpand', 'hybridExpand'],
+    ['keyword', 'keyword'],
+  ] as const satisfies readonly (readonly [keyof Pick<RetrievalCaseSummary, 'hybridNoExpand' | 'hybridExpand' | 'keyword'>, EvalCaptureMode])[];
+
+  return buildEvalCaptureFile({
+    generatedAt: opts.generatedAt,
+    git: opts.git,
+    cases: summaries.flatMap(summary => modes.map(([summaryKey, mode]) => ({
+      query: summary.query,
+      expectedSlug: summary.expectedSlug,
+      mode,
+      ...(summary.notes ? { intent: summary.notes } : {}),
+      topResults: summary[summaryKey].results,
+    }))),
+  });
 }

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   CANONICAL_RETRIEVAL_CASES,
   summarizeRetrievalCase,
+  buildReplayableRetrievalBaselineCapture,
 } from '../src/core/search/retrieval-baseline.ts';
 import type { SearchResult } from '../src/core/types.ts';
 
@@ -60,5 +61,34 @@ describe('retrieval baseline helpers', () => {
     expect(byQuery.get('Hermes Agent')).toBe('knowledge/agents/hermes');
     expect(byQuery.get('Dale Abbott')).toBe('knowledge/people/dale-abbott/summary');
     expect(byQuery.get('M5 MacBook')).toBe('knowledge/infrastructure/m5-macbook/summary');
+  });
+
+  test('exports retrieval summaries as replayable eval capture cases per mode', () => {
+    const summary = summarizeRetrievalCase(
+      {
+        query: 'Rodaco',
+        expectedSlug: 'knowledge/companies/rodaco/summary',
+        notes: 'company summary should be canonical',
+      },
+      {
+        hybridNoExpand: [result('knowledge/companies/rodaco/summary', 0.99)],
+        hybridExpand: [result('knowledge/companies/rodaco/summary', 0.98)],
+        keyword: [result('knowledge/companies/rodaco/summary', 0.77)],
+      },
+      10,
+    );
+
+    const capture = buildReplayableRetrievalBaselineCapture([summary], {
+      generatedAt: '2026-05-30T18:00:00.000Z',
+      git: { branch: 'test-branch', head: 'abc123' },
+    });
+
+    expect(capture.schema_version).toBe(1);
+    expect(capture.generated_at).toBe('2026-05-30T18:00:00.000Z');
+    expect(capture.git).toEqual({ branch: 'test-branch', head: 'abc123' });
+    expect(capture.cases.map(testCase => testCase.mode)).toEqual(['hybridNoExpand', 'hybridExpand', 'keyword']);
+    expect(capture.cases.every(testCase => testCase.query === 'Rodaco')).toBe(true);
+    expect(capture.cases.every(testCase => testCase.expectedSlug === 'knowledge/companies/rodaco/summary')).toBe(true);
+    expect(capture.cases[0].topResults[0].slug).toBe('knowledge/companies/rodaco/summary');
   });
 });
