@@ -26,6 +26,11 @@ export async function runEvalCommand(engine: BrainEngine, args: string[]): Promi
     await runEvalReplayCommand(engine, args.slice(1));
     return;
   }
+  if (args[0] === 'gate') {
+    const { runEvalGateCommand } = await import('./eval-gate.ts');
+    await runEvalGateCommand(engine, args.slice(1));
+    return;
+  }
 
   const opts = parseArgs(args);
 
