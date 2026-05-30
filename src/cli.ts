@@ -18,7 +18,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet', 'capability-catalog', 'orphan-report', 'retrieval-experiment', 'proactive-synthesis', 'promotion-queue', 'source-fix-proposals', 'fleet-drift', 'retrieval-canary']);
+const CLI_ONLY = new Set(['init', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'features', 'autopilot', 'graph-query', 'check-resolvable', 'routing-eval', 'skillify', 'skillpack', 'skillpack-check', 'frontmatter-audit', 'frontmatter-apply', 'dream-sandbox', 'source-health', 'session-packet', 'capability-catalog', 'orphan-report', 'retrieval-experiment', 'proactive-synthesis', 'promotion-queue', 'source-fix-proposals', 'fleet-drift', 'retrieval-canary', 'route-suggest']);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -394,6 +394,11 @@ async function handleCliOnly(command: string, args: string[]) {
     }
     return;
   }
+  if (command === 'route-suggest') {
+    const { runRouteSuggestCommand } = await import('./commands/route-suggest.ts');
+    await runRouteSuggestCommand(args);
+    return;
+  }
 
   // All remaining CLI-only commands need a DB connection
   const engine = await connectEngine();
@@ -603,6 +608,7 @@ TOOLS
   source-fix-proposals --dir DIR     Propose source metadata frontmatter fixes
   fleet-drift --dir DIR              Report stale/conflicting/dead-reference fleet knowledge
   retrieval-canary --gate FILE       Shadow/canary scoped retrieval candidate report
+  route-suggest --catalog FILE       Suggest agent/skill route from capability catalog
   publish <page.md> [--password]     Shareable HTML (strips private data, optional AES-256)
   check-backlinks <check|fix> [dir]  Find/fix missing back-links across brain
   lint <dir|file> [--fix]            Catch LLM artifacts, placeholder dates, bad frontmatter
