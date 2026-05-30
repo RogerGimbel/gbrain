@@ -55,11 +55,10 @@ describe('import resume checkpoint', () => {
     expect(typeof loaded.timestamp).toBe('string');
   });
 
-  test('checkpoint with matching dir and totalFiles enables resume', () => {
+  test('path-based checkpoint with matching dir enables resume', () => {
     const checkpoint = {
       dir: '/data/brain',
-      totalFiles: 100,
-      processedIndex: 50,
+      completedPaths: ['a.md', 'b.md'],
       timestamp: new Date().toISOString(),
     };
 
@@ -69,31 +68,27 @@ describe('import resume checkpoint', () => {
 
     const cp = JSON.parse(readFileSync(checkpointPath, 'utf-8'));
     const dir = '/data/brain';
-    const allFilesLength = 100;
 
     expect(cp.dir).toBe(dir);
-    expect(cp.totalFiles).toBe(allFilesLength);
-    expect(cp.processedIndex).toBe(50);
+    expect(cp.completedPaths).toEqual(['a.md', 'b.md']);
   });
 
-  test('checkpoint with different dir does not resume', () => {
+  test('path-based checkpoint with different dir does not resume', () => {
     const checkpointPath = gbrainPath('import-checkpoint.json');
     mkdirSync(gbrainPath(), { recursive: true });
     writeFileSync(checkpointPath, JSON.stringify({
       dir: '/data/other-brain',
-      totalFiles: 100,
-      processedIndex: 50,
+      completedPaths: ['a.md'],
       timestamp: new Date().toISOString(),
     }));
 
     const cp = JSON.parse(readFileSync(checkpointPath, 'utf-8'));
     const dir = '/data/brain';
-    const allFilesLength = 100;
 
-    expect(cp.dir === dir && cp.totalFiles === allFilesLength).toBe(false);
+    expect(cp.dir === dir && Array.isArray(cp.completedPaths)).toBe(false);
   });
 
-  test('checkpoint with different totalFiles does not resume', () => {
+  test('old positional checkpoint is not path-based resumable', () => {
     const checkpointPath = gbrainPath('import-checkpoint.json');
     mkdirSync(gbrainPath(), { recursive: true });
     writeFileSync(checkpointPath, JSON.stringify({
@@ -104,10 +99,7 @@ describe('import resume checkpoint', () => {
     }));
 
     const cp = JSON.parse(readFileSync(checkpointPath, 'utf-8'));
-    const dir = '/data/brain';
-    const allFilesLength = 100;
-
-    expect(cp.dir === dir && cp.totalFiles === allFilesLength).toBe(false);
+    expect(Array.isArray(cp.completedPaths)).toBe(false);
   });
 
   test('invalid checkpoint JSON starts fresh', () => {
@@ -144,8 +136,8 @@ describe('import resume checkpoint', () => {
 
     const loaded = JSON.parse(readFileSync(isolatedCheckpoint, 'utf-8'));
     expect(loaded.dir).toBe(brainDir);
-    expect(loaded.totalFiles).toBe(100);
-    expect(loaded.processedIndex).toBe(100);
+    expect(loaded.completedPaths).toEqual([]);
+    expect(typeof loaded.timestamp).toBe('string');
   });
   test('runImport does not advance git sync checkpoint when any file is skipped with an error', async () => {
     writeFileSync(join(brainDir, 'good.md'), `---

@@ -1,10 +1,18 @@
-import { readdirSync, lstatSync, existsSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
+import { readdirSync, lstatSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join, relative } from 'path';
 import { cpus, totalmem } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFile } from '../core/import-file.ts';
 import { gbrainPath, loadConfig } from '../core/config.ts';
+import {
+  clearCheckpoint,
+  loadCheckpoint,
+  markCompletedPath,
+  resumeFilter,
+  saveCheckpoint,
+} from '../core/import-checkpoint.ts';
+import { sortNewestFirst } from '../core/sort-newest-first.ts';
 
 function defaultWorkers(): number {
   const cpuCount = cpus().length;
@@ -35,25 +43,17 @@ export async function runImport(engine: BrainEngine, args: string[]) {
   }
 
   // Collect all .md files
-  const allFiles = collectMarkdownFiles(dir);
+  const allFiles = sortNewestFirst(collectMarkdownFiles(dir));
   console.log(`Found ${allFiles.length} markdown files`);
 
   // Resume from checkpoint if available
   const checkpointPath = gbrainPath('import-checkpoint.json');
-  let files = allFiles;
-  let resumeIndex = 0;
+  const loadedCheckpoint = fresh ? null : loadCheckpoint(checkpointPath, dir);
+  const completedPaths = new Set<string>(loadedCheckpoint?.completedPaths ?? []);
+  const files = resumeFilter(allFiles, dir, completedPaths);
 
-  if (!fresh && existsSync(checkpointPath)) {
-    try {
-      const cp = JSON.parse(readFileSync(checkpointPath, 'utf-8'));
-      if (cp.dir === dir && cp.totalFiles === allFiles.length) {
-        resumeIndex = cp.processedIndex;
-        files = allFiles.slice(resumeIndex);
-        console.log(`Resuming from checkpoint: skipping ${resumeIndex} already-processed files`);
-      }
-    } catch {
-      // Invalid checkpoint, start fresh
-    }
+  if (loadedCheckpoint) {
+    console.log(`Resuming from checkpoint: skipping ${completedPaths.size} completed files`);
   }
 
   // Determine actual worker count
@@ -96,6 +96,7 @@ export async function runImport(engine: BrainEngine, args: string[]) {
           console.error(`  Skipped ${relativePath}: ${result.error}`);
         }
       }
+      markCompletedPath(completedPaths, relativePath, result);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       const errorKey = msg.replace(/"[^"]*"/g, '""');
@@ -113,16 +114,11 @@ export async function runImport(engine: BrainEngine, args: string[]) {
       logProgress();
       // Save checkpoint every 100 files — track completed file set, not just a counter
       if (processed % 100 === 0) {
-        try {
-          const cpDir = gbrainPath();
-          if (!existsSync(cpDir)) { const { mkdirSync } = await import('fs'); mkdirSync(cpDir, { recursive: true }); }
-          writeFileSync(checkpointPath, JSON.stringify({
-            dir, totalFiles: allFiles.length,
-            processedIndex: resumeIndex + processed,
-            completedFiles: importedSlugs.length + skipped,
-            timestamp: new Date().toISOString(),
-          }));
-        } catch { /* non-fatal */ }
+        saveCheckpoint(checkpointPath, {
+          dir,
+          completedPaths: [...completedPaths],
+          timestamp: new Date().toISOString(),
+        });
       }
     }
   }
@@ -152,7 +148,7 @@ export async function runImport(engine: BrainEngine, args: string[]) {
       while (true) {
         const idx = queueIndex++;
         if (idx >= files.length) break;
-        await processFile(eng, files[idx]);
+        await processFile(eng, files[idx]!);
       }
     }));
 
@@ -173,9 +169,14 @@ export async function runImport(engine: BrainEngine, args: string[]) {
   }
 
   // Clear checkpoint only on successful completion (no errors)
-  if (errors === 0 && existsSync(checkpointPath)) {
-    try { unlinkSync(checkpointPath); } catch { /* non-fatal */ }
-  } else if (errors > 0 && existsSync(checkpointPath)) {
+  if (errors === 0) {
+    clearCheckpoint(checkpointPath);
+  } else if (errors > 0) {
+    saveCheckpoint(checkpointPath, {
+      dir,
+      completedPaths: [...completedPaths],
+      timestamp: new Date().toISOString(),
+    });
     console.log(`  Checkpoint preserved (${errors} errors). Run again to retry failed files.`);
   }
 
