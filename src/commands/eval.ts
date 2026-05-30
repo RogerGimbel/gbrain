@@ -21,6 +21,12 @@ import {
 } from '../core/search/eval.ts';
 
 export async function runEvalCommand(engine: BrainEngine, args: string[]): Promise<void> {
+  if (args[0] === 'replay') {
+    const { runEvalReplayCommand } = await import('./eval-replay.ts');
+    await runEvalReplayCommand(engine, args.slice(1));
+    return;
+  }
+
   const opts = parseArgs(args);
 
   if (opts.help) {
