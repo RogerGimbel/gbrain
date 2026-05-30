@@ -64,4 +64,17 @@ describe('source metadata fix proposals', () => {
     expect(markdown).toContain('review-only');
     expect(markdown).toContain('source_agent: Argos');
   });
+
+  test('prioritizes explicit agent path segments over incidental agent mentions in content', () => {
+    const root = tmp();
+    const dir = join(root, 'knowledge/agent-fleet/adapters');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'argos.md'), '# Argos Adapter\n\nHermes can route work to Argos.', 'utf8');
+    writeFileSync(join(dir, 'rogue.md'), '# Rogue Adapter\n\nHermes tracks Rogue status.', 'utf8');
+
+    const report = generateSourceFixProposals({ root, dryRun: true, now: new Date('2026-05-30T12:00:00Z') });
+
+    expect(report.proposals.find(p => p.path.endsWith('adapters/argos.md'))?.proposed_frontmatter.source_agent).toBe('Argos');
+    expect(report.proposals.find(p => p.path.endsWith('adapters/rogue.md'))?.proposed_frontmatter.source_agent).toBe('Rogue');
+  });
 });

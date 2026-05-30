@@ -174,9 +174,16 @@ function isFleetRelevant(rel: string): boolean {
   return rel.startsWith('knowledge/agent-fleet/') || rel.startsWith('knowledge/checkpoints/dev/') || rel.startsWith('knowledge/agents/');
 }
 
+const KNOWN_AGENT_NAMES = ['Hermes', 'Argos', 'Winston', 'Cato', 'Rogue', 'OOMOps'];
+
 function inferAgent(rel: string, content: string): string | undefined {
-  const hay = `${rel}\n${content.slice(0, 400)}`.toLowerCase();
-  for (const name of ['Hermes', 'Argos', 'Winston', 'Cato', 'Rogue', 'OOMOps']) {
+  const path = rel.toLowerCase();
+  for (const name of KNOWN_AGENT_NAMES) {
+    const token = name.toLowerCase();
+    if (path.split('/').some(part => part === token || part === `${token}.md` || part.includes(`-${token}-`) || part.startsWith(`${token}-`) || part.endsWith(`-${token}.md`))) return name;
+  }
+  const hay = content.slice(0, 400).toLowerCase();
+  for (const name of KNOWN_AGENT_NAMES) {
     if (hay.includes(name.toLowerCase())) return name;
   }
   return undefined;
