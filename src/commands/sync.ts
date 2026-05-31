@@ -358,6 +358,11 @@ async function performFullSync(
 }
 
 export async function runSync(engine: BrainEngine, args: string[]) {
+  if (args.includes('--help') || args.includes('-h')) {
+    printSyncHelp();
+    return;
+  }
+
   const repoPath = args.find((a, i) => args[i - 1] === '--repo') || undefined;
   const watch = args.includes('--watch');
   const intervalStr = args.find((a, i) => args[i - 1] === '--interval');
@@ -399,6 +404,23 @@ export async function runSync(engine: BrainEngine, args: string[]) {
     }
     await new Promise(r => setTimeout(r, interval * 1000));
   }
+}
+
+function printSyncHelp() {
+  console.log(`Usage: gbrain sync [options]
+
+Git-to-brain incremental sync.
+
+Options:
+  --repo <path>       Git repository to sync. Defaults to config sync.repo_path.
+  --watch             Continuously sync on an interval.
+  --interval <sec>    Watch interval in seconds (default 60).
+  --dry-run           Show pending syncable changes without importing or advancing state.
+  --full              Force a full reimport from the repository.
+  --no-pull           Do not run git pull before syncing.
+  --no-embed          Import text only; leave embedding refresh for gbrain embed.
+  --skip-failed       Acknowledge recorded parse failures and advance past them.
+  -h, --help          Show this message.`);
 }
 
 function printSyncResult(result: SyncResult) {
