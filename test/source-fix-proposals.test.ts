@@ -77,4 +77,65 @@ describe('source metadata fix proposals', () => {
     expect(report.proposals.find(p => p.path.endsWith('adapters/argos.md'))?.proposed_frontmatter.source_agent).toBe('Argos');
     expect(report.proposals.find(p => p.path.endsWith('adapters/rogue.md'))?.proposed_frontmatter.source_agent).toBe('Rogue');
   });
+
+  test('treats explicit agent frontmatter as high-confidence source ownership without adding semantic status', () => {
+    const root = tmp();
+    const dir = join(root, 'knowledge/agent-fleet');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'argos-web-provider-decision.md'), [
+      '---',
+      'title: Argos Web Provider Decision',
+      'agent: Hermes',
+      '---',
+      '# Argos Web Provider Decision',
+    ].join('\n'), 'utf8');
+
+    const report = generateSourceFixProposals({ root, dryRun: true, now: new Date('2026-05-30T12:00:00Z') });
+    const proposal = report.proposals[0];
+
+    expect(proposal.proposed_frontmatter.source_agent).toBe('Hermes');
+    expect(proposal.confidence).toBe('high');
+    expect(proposal.evidence).toContain('explicit agent frontmatter: Hermes');
+    expect(proposal.proposed_frontmatter.status).toBeUndefined();
+  });
+
+  test('does not promote fleet-wide common docs from incidental content mentions', () => {
+    const root = tmp();
+    const dir = join(root, 'knowledge/agent-fleet/common');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'checkpoint-contract.md'), [
+      '---',
+      'title: Agent Fleet Durable Checkpoint Contract',
+      '---',
+      '# Agent Fleet Durable Checkpoint Contract',
+      'Roger agents include Hermes, Argos, Rogue, Winston, and Cato.',
+    ].join('\n'), 'utf8');
+
+    const report = generateSourceFixProposals({ root, dryRun: true, now: new Date('2026-05-30T12:00:00Z') });
+    const proposal = report.proposals[0];
+
+    expect(proposal.proposed_frontmatter.source_agent).toBe('unknown');
+    expect(proposal.confidence).toBe('low');
+    expect(proposal.evidence).toContain('fleet-wide common path requires manual source-agent review');
+  });
+
+  test('does not infer one owner for multi-agent filenames without explicit frontmatter', () => {
+    const root = tmp();
+    const dir = join(root, 'knowledge/agent-fleet');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'cato-winston-parity-caveat-readonly-audit.md'), [
+      '---',
+      'title: Cato/Winston Fleet Parity Caveat Read-only Audit',
+      '---',
+      '# Cato/Winston Fleet Parity Caveat Read-only Audit',
+      'Cato and Winston both need GBrain parity checks.',
+    ].join('\n'), 'utf8');
+
+    const report = generateSourceFixProposals({ root, dryRun: true, now: new Date('2026-05-30T12:00:00Z') });
+    const proposal = report.proposals[0];
+
+    expect(proposal.proposed_frontmatter.source_agent).toBe('unknown');
+    expect(proposal.confidence).toBe('low');
+    expect(proposal.evidence).toContain('multiple agents in path require manual source-agent review: Winston, Cato');
+  });
 });

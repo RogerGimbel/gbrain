@@ -287,20 +287,20 @@ function proposalForFile(root: string, file: string, now: Date): SourceFixPropos
   const content = readFileSync(file, 'utf8');
   const fm = parseFrontmatter(content);
   const rel = relative(root, file).replace(/\\/g, '/');
-  const agent = first(fm.source_agent, fm.agent) ?? inferAgent(rel, content);
+  const explicitAgent = first(fm.source_agent, fm.agent);
+  const agent = explicitAgent ?? inferAgent(rel);
   const updated = first(fm.source_updated_at, fm.last_reviewed, fm.updated, fm.created);
   const missing: string[] = [];
   if (!fm.source_agent && !fm.agent) missing.push('source_agent');
   if (!updated) missing.push('source_updated_at');
   if (missing.length === 0) return undefined;
-  const evidence = evidenceFor(rel, content, agent);
+  const evidence = evidenceFor(rel, content, agent, explicitAgent);
   const inferredAgent = agent ?? 'unknown';
   const proposed: Record<string, string> = {};
   if (!fm.source_agent) proposed.source_agent = inferredAgent;
   if (!updated) proposed.source_updated_at = now.toISOString().slice(0, 10);
   if (!fm.source_origin) proposed.source_origin = inferOrigin(rel);
-  if (!fm.confidence) proposed.confidence = confidenceFor(inferredAgent, evidence);
-  if (!fm.status) proposed.status = 'active';
+  if (!fm.confidence) proposed.confidence = confidenceFor(inferredAgent, evidence, Boolean(explicitAgent));
   return {
     path: rel,
     title: stripQuotes(fm.title) ?? basename(file),
@@ -357,17 +357,23 @@ function isFleetRelevant(rel: string): boolean {
 
 const KNOWN_AGENT_NAMES = ['Hermes', 'Argos', 'Winston', 'Cato', 'Rogue', 'OOMOps'];
 
-function inferAgent(rel: string, content: string): string | undefined {
+function inferAgent(rel: string): string | undefined {
+  if (isFleetWideCommonPath(rel)) return undefined;
+  const matches = pathAgentMatches(rel);
+  if (matches.length !== 1) return undefined;
+  return matches[0];
+}
+
+function pathAgentMatches(rel: string): string[] {
   const path = rel.toLowerCase();
-  for (const name of KNOWN_AGENT_NAMES) {
+  return KNOWN_AGENT_NAMES.filter(name => {
     const token = name.toLowerCase();
-    if (path.split('/').some(part => part === token || part === `${token}.md` || part.includes(`-${token}-`) || part.startsWith(`${token}-`) || part.endsWith(`-${token}.md`))) return name;
-  }
-  const hay = content.slice(0, 400).toLowerCase();
-  for (const name of KNOWN_AGENT_NAMES) {
-    if (hay.includes(name.toLowerCase())) return name;
-  }
-  return undefined;
+    return path.split('/').some(part => part === token || part === `${token}.md` || part.includes(`-${token}-`) || part.startsWith(`${token}-`) || part.endsWith(`-${token}.md`));
+  });
+}
+
+function isFleetWideCommonPath(rel: string): boolean {
+  return rel.startsWith('knowledge/agent-fleet/common/');
 }
 
 function inferOrigin(rel: string): string {
@@ -377,19 +383,25 @@ function inferOrigin(rel: string): string {
   return 'unknown';
 }
 
-function confidenceFor(agent: string, evidence: string[]): 'low' | 'medium' | 'high' {
+function confidenceFor(agent: string, evidence: string[], explicitAgent: boolean): 'low' | 'medium' | 'high' {
+  if (explicitAgent && agent !== 'unknown') return 'high';
   if (agent === 'unknown') return 'low';
+  if (evidence.some(item => item.includes('requires manual source-agent review'))) return 'low';
   if (evidence.length >= 2) return 'medium';
   return 'low';
 }
 
-function evidenceFor(rel: string, content: string, agent?: string): string[] {
+function evidenceFor(rel: string, content: string, agent?: string, explicitAgent?: string): string[] {
   const evidence: string[] = [];
-  if (agent) evidence.push(`agent inferred as ${agent}`);
+  if (explicitAgent) evidence.push(`explicit agent frontmatter: ${explicitAgent}`);
+  else if (agent) evidence.push(`agent inferred as ${agent}`);
+  const matches = pathAgentMatches(rel);
+  if (!explicitAgent && matches.length > 1) evidence.push(`multiple agents in path require manual source-agent review: ${matches.join(', ')}`);
+  if (!explicitAgent && isFleetWideCommonPath(rel)) evidence.push('fleet-wide common path requires manual source-agent review');
   if (/knowledge\/checkpoints\//.test(rel)) evidence.push('checkpoint path');
   if (/knowledge\/agent-fleet\//.test(rel)) evidence.push('agent-fleet path');
   if (/knowledge\/agents\//.test(rel)) evidence.push('agent profile path');
-  if (/\bHermes|Argos|Winston|Cato|Rogue|OOMOps\b/.test(content)) evidence.push('agent named in content');
+  if (/\b(Hermes|Argos|Winston|Cato|Rogue|OOMOps)\b/.test(content)) evidence.push('agent named in content');
   return evidence;
 }
 
