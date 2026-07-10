@@ -1,4 +1,4 @@
-import { readdirSync, lstatSync, existsSync } from 'fs';
+import { readdirSync, lstatSync, existsSync, readFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join, relative } from 'path';
 import { cpus, totalmem } from 'os';
@@ -32,25 +32,34 @@ export async function runImport(engine: BrainEngine, args: string[]) {
   const workersIdx = args.indexOf('--workers');
   const workersArg = workersIdx !== -1 ? args[workersIdx + 1] : null;
   const workerCount = workersArg ? parseInt(workersArg, 10) : 1;
-  // Find dir: first non-flag arg that isn't a value for --workers
+  const excludeDirs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--exclude-dir' && args[i + 1]) excludeDirs.push(args[i + 1]!);
+  }
+  const skipGbrainSlugged = args.includes('--skip-gbrain-slugged');
+  // Find dir: first non-flag arg that isn't a value for a named flag.
   const flagValues = new Set<number>();
   if (workersIdx !== -1) flagValues.add(workersIdx + 1);
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--exclude-dir') flagValues.add(i + 1);
+  }
   const dir = args.find((a, i) => !a.startsWith('--') && !flagValues.has(i));
 
   if (!dir) {
-    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--json]');
+    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--json] [--exclude-dir DIR] [--skip-gbrain-slugged]');
     process.exit(1);
   }
+  const importDir = dir!;
 
   // Collect all .md files
-  const allFiles = sortNewestFirst(collectMarkdownFiles(dir));
+  const allFiles = sortNewestFirst(collectMarkdownFiles(importDir, { excludeDirs, skipGbrainSlugged }));
   console.log(`Found ${allFiles.length} markdown files`);
 
   // Resume from checkpoint if available
   const checkpointPath = gbrainPath('import-checkpoint.json');
-  const loadedCheckpoint = fresh ? null : loadCheckpoint(checkpointPath, dir);
+  const loadedCheckpoint = fresh ? null : loadCheckpoint(checkpointPath, importDir);
   const completedPaths = new Set<string>(loadedCheckpoint?.completedPaths ?? []);
-  const files = resumeFilter(allFiles, dir, completedPaths);
+  const files = resumeFilter(allFiles, importDir, completedPaths);
 
   if (loadedCheckpoint) {
     console.log(`Resuming from checkpoint: skipping ${completedPaths.size} completed files`);
@@ -80,7 +89,7 @@ export async function runImport(engine: BrainEngine, args: string[]) {
   }
 
   async function processFile(eng: BrainEngine, filePath: string) {
-    const relativePath = relative(dir, filePath);
+    const relativePath = relative(importDir, filePath);
     try {
       const result = await importFile(eng, filePath, relativePath, { noEmbed });
       if (result.status === 'imported') {
@@ -115,7 +124,7 @@ export async function runImport(engine: BrainEngine, args: string[]) {
       // Save checkpoint every 100 files — track completed file set, not just a counter
       if (processed % 100 === 0) {
         saveCheckpoint(checkpointPath, {
-          dir,
+          dir: importDir,
           completedPaths: [...completedPaths],
           timestamp: new Date().toISOString(),
         });
@@ -173,7 +182,7 @@ export async function runImport(engine: BrainEngine, args: string[]) {
     clearCheckpoint(checkpointPath);
   } else if (errors > 0) {
     saveCheckpoint(checkpointPath, {
-      dir,
+      dir: importDir,
       completedPaths: [...completedPaths],
       timestamp: new Date().toISOString(),
     });
@@ -204,12 +213,12 @@ export async function runImport(engine: BrainEngine, args: string[]) {
 
   // Import → sync continuity: write sync checkpoint if this is a git repo
   try {
-    if (errors === 0 && existsSync(join(dir, '.git'))) {
-      const head = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim();
+    if (errors === 0 && existsSync(join(importDir, '.git'))) {
+      const head = execFileSync('git', ['-C', importDir, 'rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim();
       await engine.setConfig('sync.last_commit', head);
       await engine.setConfig('sync.last_run', new Date().toISOString());
-      await engine.setConfig('sync.repo_path', dir);
-    } else if (errors > 0 && existsSync(join(dir, '.git'))) {
+      await engine.setConfig('sync.repo_path', importDir);
+    } else if (errors > 0 && existsSync(join(importDir, '.git'))) {
       console.log(`  Git sync checkpoint not advanced because ${errors} import error(s) must be fixed or re-imported first.`);
     }
   } catch {
@@ -217,8 +226,29 @@ export async function runImport(engine: BrainEngine, args: string[]) {
   }
 }
 
-export function collectMarkdownFiles(dir: string): string[] {
+export interface CollectMarkdownOptions {
+  excludeDirs?: string[];
+  skipGbrainSlugged?: boolean;
+}
+
+function hasGbrainSlugFrontmatter(filePath: string): boolean {
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    if (!content.startsWith('---')) return false;
+    const end = content.indexOf('\n---', 3);
+    if (end < 0) return false;
+    return /^gbrain_slug\s*:/m.test(content.slice(3, end));
+  } catch {
+    return false;
+  }
+}
+
+export function collectMarkdownFiles(dir: string, opts: CollectMarkdownOptions = {}): string[] {
   const files: string[] = [];
+  const root = dir;
+  const excluded = new Set(
+    (opts.excludeDirs || []).map(value => value.replace(/^\.\//, '').replace(/\/$/, '')),
+  );
 
   function walk(d: string) {
     for (const entry of readdirSync(d)) {
@@ -253,8 +283,11 @@ export function collectMarkdownFiles(dir: string): string[] {
       }
 
       if (stat.isDirectory()) {
+        const relDir = relative(root, full).replace(/\\/g, '/');
+        if ([...excluded].some(prefix => relDir === prefix || relDir.startsWith(`${prefix}/`))) continue;
         walk(full);
       } else if (entry.endsWith('.md') || entry.endsWith('.mdx')) {
+        if (opts.skipGbrainSlugged && hasGbrainSlugFrontmatter(full)) continue;
         files.push(full);
       }
     }

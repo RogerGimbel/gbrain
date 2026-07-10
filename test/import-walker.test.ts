@@ -86,4 +86,27 @@ describe('collectMarkdownFiles — symlink containment', () => {
     expect(files).toContain(join(root, 'legit.md'));
     expect(files).not.toContain(join(root, 'dangling.md'));
   });
+
+  test('excludes reviewed top-level directories from bulk import', () => {
+    mkdirSync(join(root, 'artifacts'));
+    mkdirSync(join(root, 'knowledge'));
+    writeFileSync(join(root, 'artifacts', 'report.md'), '# generated report\n');
+    writeFileSync(join(root, 'knowledge', 'canonical.md'), '# canonical\n');
+
+    const files = collectMarkdownFiles(root, { excludeDirs: ['artifacts'] });
+    expect(files).toContain(join(root, 'knowledge', 'canonical.md'));
+    expect(files).not.toContain(join(root, 'artifacts', 'report.md'));
+  });
+
+  test('skips files already managed by the direct gbrain checkpoint lane', () => {
+    writeFileSync(join(root, 'normal.md'), '---\ntitle: Normal\n---\n# Normal\n');
+    writeFileSync(
+      join(root, 'managed.md'),
+      '---\ntype: dev-checkpoint\ngbrain_slug: checkpoints/dev/demo/managed\n---\n# Managed\n',
+    );
+
+    const files = collectMarkdownFiles(root, { skipGbrainSlugged: true });
+    expect(files).toContain(join(root, 'normal.md'));
+    expect(files).not.toContain(join(root, 'managed.md'));
+  });
 });
