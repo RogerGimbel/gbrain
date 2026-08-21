@@ -127,18 +127,10 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
     renamed: manifest.renamed.filter(r => isSyncable(r.to)),
   };
 
-  // Delete pages that became un-syncable (modified but filtered out)
+  // Pages that became un-syncable still need deletion on an applied sync, but a
+  // dry run must only report that intent. Never read-modify-delete before the
+  // dry-run gate.
   const unsyncableModified = manifest.modified.filter(p => !isSyncable(p));
-  for (const path of unsyncableModified) {
-    const slug = pathToSlug(path);
-    try {
-      const existing = await engine.getPage(slug);
-      if (existing) {
-        await engine.deletePage(slug);
-        console.log(`  Deleted un-syncable page: ${slug}`);
-      }
-    } catch { /* ignore */ }
-  }
 
   const totalChanges = filtered.added.length + filtered.modified.length +
     filtered.deleted.length + filtered.renamed.length;
@@ -150,7 +142,10 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
     if (filtered.modified.length) console.log(`  Modified: ${filtered.modified.join(', ')}`);
     if (filtered.deleted.length) console.log(`  Deleted: ${filtered.deleted.join(', ')}`);
     if (filtered.renamed.length) console.log(`  Renamed: ${filtered.renamed.map(r => `${r.from} -> ${r.to}`).join(', ')}`);
-    if (totalChanges === 0) console.log(`  No syncable changes.`);
+    if (unsyncableModified.length) {
+      console.log(`  Would delete un-syncable pages on apply: ${unsyncableModified.map(path => pathToSlug(path)).join(', ')}`);
+    }
+    if (totalChanges === 0 && unsyncableModified.length === 0) console.log(`  No syncable changes.`);
     return {
       status: 'dry_run',
       fromCommit: lastCommit,
@@ -162,6 +157,18 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
       chunksCreated: 0,
       pagesAffected: [],
     };
+  }
+
+  // Delete pages that became un-syncable only during an applied sync.
+  for (const path of unsyncableModified) {
+    const slug = pathToSlug(path);
+    try {
+      const existing = await engine.getPage(slug);
+      if (existing) {
+        await engine.deletePage(slug);
+        console.log(`  Deleted un-syncable page: ${slug}`);
+      }
+    } catch { /* ignore */ }
   }
 
   if (totalChanges === 0) {

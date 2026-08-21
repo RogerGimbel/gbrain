@@ -15,15 +15,20 @@ function git(repo: string, ...args: string[]) {
 class FakeEngine {
   kind = 'postgres' as const;
   config = new Map<string, string>();
+  pages = new Map<string, any>();
+  deletedSlugs: string[] = [];
   async getConfig(key: string) { return this.config.get(key) ?? null; }
   async setConfig(key: string, value: string) { this.config.set(key, value); }
-  async getPage(_slug: string) { return null; }
-  async deletePage(_slug: string) {}
+  async getPage(slug: string) { return this.pages.get(slug) ?? null; }
+  async deletePage(slug: string) {
+    this.deletedSlugs.push(slug);
+    this.pages.delete(slug);
+  }
   async updateSlug(_oldSlug: string, _newSlug: string) {}
   async logIngest(_entry: any) {}
   async transaction<T>(fn: (tx: this) => Promise<T>) { return fn(this); }
   async createVersion(_slug: string) {}
-  async putPage(_slug: string, _page: any) {}
+  async putPage(slug: string, page: any) { this.pages.set(slug, { slug, ...page }); }
   async getTags(_slug: string) { return []; }
   async removeTag(_slug: string, _tag: string) {}
   async addTag(_slug: string, _tag: string) {}
@@ -140,5 +145,52 @@ describe('performSync failure gate', () => {
     expect(engine.config.get('sync.last_commit')).toBe(secondCommit);
     expect(unacknowledgedSyncFailures()).toHaveLength(0);
     expect(loadSyncFailures()[0].acknowledged).toBe(true);
+  });
+
+  test('dry run preserves modified pages that are no longer syncable', async () => {
+    const repo = join(tmpRoot, 'repo');
+    mkdirSync(repo, { recursive: true });
+    git(tmpRoot, 'init', 'repo');
+    git(repo, 'config', 'user.email', 'test@example.com');
+    git(repo, 'config', 'user.name', 'GBrain Test');
+    writeFileSync(join(repo, 'index.md'), '---\ntype: index\ntitle: Original Index\n---\n# Original Index\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-m', 'initial index');
+    const firstCommit = git(repo, 'rev-parse', 'HEAD');
+
+    writeFileSync(join(repo, 'index.md'), '---\ntype: index\ntitle: Updated Index\n---\n# Updated Index\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-m', 'update index');
+    const secondCommit = git(repo, 'rev-parse', 'HEAD');
+
+    const engine = new FakeEngine();
+    engine.config.set('sync.last_commit', firstCommit);
+    engine.config.set('sync.repo_path', repo);
+    engine.pages.set('index', { slug: 'index', title: 'Original Index', content_hash: 'original' });
+
+    const dryRun = await performSync(engine as any, {
+      repoPath: repo,
+      noPull: true,
+      noEmbed: true,
+      noExtract: true,
+      dryRun: true,
+    });
+
+    expect(dryRun.status).toBe('dry_run');
+    expect(engine.deletedSlugs).toEqual([]);
+    expect(engine.pages.has('index')).toBe(true);
+    expect(engine.config.get('sync.last_commit')).toBe(firstCommit);
+
+    const applied = await performSync(engine as any, {
+      repoPath: repo,
+      noPull: true,
+      noEmbed: true,
+      noExtract: true,
+    });
+
+    expect(applied.status).toBe('up_to_date');
+    expect(engine.deletedSlugs).toEqual(['index']);
+    expect(engine.pages.has('index')).toBe(false);
+    expect(engine.config.get('sync.last_commit')).toBe(secondCommit);
   });
 });
