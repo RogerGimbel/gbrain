@@ -137,15 +137,23 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
 
   // Dry run
   if (opts.dryRun) {
+    const existingUnsyncableSlugs: string[] = [];
+    for (const path of unsyncableModified) {
+      const slug = pathToSlug(path);
+      try {
+        if (await engine.getPage(slug)) existingUnsyncableSlugs.push(slug);
+      } catch { /* ignore */ }
+    }
+
     console.log(`Sync dry run: ${lastCommit.slice(0, 8)}..${headCommit.slice(0, 8)}`);
     if (filtered.added.length) console.log(`  Added: ${filtered.added.join(', ')}`);
     if (filtered.modified.length) console.log(`  Modified: ${filtered.modified.join(', ')}`);
     if (filtered.deleted.length) console.log(`  Deleted: ${filtered.deleted.join(', ')}`);
     if (filtered.renamed.length) console.log(`  Renamed: ${filtered.renamed.map(r => `${r.from} -> ${r.to}`).join(', ')}`);
-    if (unsyncableModified.length) {
-      console.log(`  Would delete un-syncable pages on apply: ${unsyncableModified.map(path => pathToSlug(path)).join(', ')}`);
+    if (existingUnsyncableSlugs.length) {
+      console.log(`  Would delete un-syncable pages on apply: ${existingUnsyncableSlugs.join(', ')}`);
     }
-    if (totalChanges === 0 && unsyncableModified.length === 0) console.log(`  No syncable changes.`);
+    if (totalChanges === 0 && existingUnsyncableSlugs.length === 0) console.log(`  No syncable changes.`);
     return {
       status: 'dry_run',
       fromCommit: lastCommit,

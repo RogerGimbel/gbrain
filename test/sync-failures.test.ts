@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -154,11 +154,13 @@ describe('performSync failure gate', () => {
     git(repo, 'config', 'user.email', 'test@example.com');
     git(repo, 'config', 'user.name', 'GBrain Test');
     writeFileSync(join(repo, 'index.md'), '---\ntype: index\ntitle: Original Index\n---\n# Original Index\n');
+    writeFileSync(join(repo, '.gitignore'), 'initial\n');
     git(repo, 'add', '.');
     git(repo, 'commit', '-m', 'initial index');
     const firstCommit = git(repo, 'rev-parse', 'HEAD');
 
     writeFileSync(join(repo, 'index.md'), '---\ntype: index\ntitle: Updated Index\n---\n# Updated Index\n');
+    writeFileSync(join(repo, '.gitignore'), 'updated\n');
     git(repo, 'add', '.');
     git(repo, 'commit', '-m', 'update index');
     const secondCommit = git(repo, 'rev-parse', 'HEAD');
@@ -168,6 +170,7 @@ describe('performSync failure gate', () => {
     engine.config.set('sync.repo_path', repo);
     engine.pages.set('index', { slug: 'index', title: 'Original Index', content_hash: 'original' });
 
+    const logSpy = spyOn(console, 'log').mockImplementation(() => {});
     const dryRun = await performSync(engine as any, {
       repoPath: repo,
       noPull: true,
@@ -175,8 +178,13 @@ describe('performSync failure gate', () => {
       noExtract: true,
       dryRun: true,
     });
+    const dryRunLogs = logSpy.mock.calls.map(args => args.join(' ')).join('\n');
+    logSpy.mockRestore();
 
     expect(dryRun.status).toBe('dry_run');
+    expect(dryRunLogs).toContain('Would delete un-syncable pages on apply: index');
+    expect(dryRunLogs).not.toContain('.gitignore');
+    expect(dryRunLogs).not.toContain('Deleted un-syncable page:');
     expect(engine.deletedSlugs).toEqual([]);
     expect(engine.pages.has('index')).toBe(true);
     expect(engine.config.get('sync.last_commit')).toBe(firstCommit);
